@@ -1,0 +1,38 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.10.3"}
+        com.phronemophobic/membrane {:local/root "../membrane2"}
+        com.phronemophobic/dev-db {:local/root "../dev-db"}
+        com.phronemophobic.membrane/pretty-view {:local/root "../pretty-view"}
+        org.clojure/core.async {:mvn/version "1.3.610"}
+        mogenslund/liquid {:mvn/version "2.0.3"}
+        org.clojure/tools.analyzer.jvm {:mvn/version "1.1.0"}}
+ :aliases
+ {:run-m {:main-opts ["-m" "com.phronemophobic.membrane.spreadsheet"]}
+  :run-x {:ns-default com.phronemophobic.membrane.spreadsheet
+          :exec-fn greet
+          :exec-args {:name "Clojure"}}
+  :test {:extra-paths ["test"]
+         :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}}}
+  :skija {:extra-deps {org.jetbrains.skija/skija-macos-x64 {:mvn/version "0.89.18"}
+                       org.lwjgl/lwjgl {:mvn/version "3.2.3"}
+                       org.lwjgl/lwjgl$natives-macos {:mvn/version "3.2.3"}
+                       org.lwjgl/lwjgl-glfw {:mvn/version "3.2.3"}
+                       org.lwjgl/lwjgl-glfw$natives-macos {:mvn/version "3.2.3"}
+                       org.lwjgl/lwjgl-opengl {:mvn/version "3.2.3"}
+                       org.lwjgl/lwjgl-opengl$natives-macos {:mvn/version "3.2.3"}}}
+  :runner
+  {:extra-deps {com.cognitect/test-runner
+                {:git/url "https://github.com/cognitect-labs/test-runner"
+                 :sha "b6b3193fcc42659d7e46ecd1884a228993441182"}}
+   :main-opts ["-m" "cognitect.test-runner"
+               "-d" "test"]}
+  :uberjar {:replace-deps {com.github.seancorfield/depstar {:mvn/version "2.0.211"}}
+            :exec-fn hf.depstar/uberjar
+            :exec-args {:aot true
+                        :jar "spreadsheet.jar"
+                        :main-class "com.phronemophobic.membrane.spreadsheet"
+                        :sync-pom true}}}
+
+ :mvn/repos
+ {"space-maven" {:url "https://packages.jetbrains.team/maven/p/skija/maven"}
+  "sonatype-oss-public" {:url "https://oss.sonatype.org/content/groups/public/"}}}
