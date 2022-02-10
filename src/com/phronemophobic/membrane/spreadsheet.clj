@@ -22,6 +22,34 @@
   (:import java.io.PushbackReader)
   (:gen-class))
 
+(defprotocol IResult
+  (-re-eval [this form])
+  (-error [this])
+  (-success [this])
+  (-val [this]))
+
+(deftype AResult [re-eval error success]
+  Object
+  (hashCode [_] (System/identityHashCode (or error success)))
+
+  IResult
+  (-re-eval [_ form]
+    (re-eval form))
+  (-error [_]
+    error)
+  (-success [_]
+    success)
+  (-val [this]
+    (or error success))
+
+  iv/PWrapped
+  (-unwrap [_]
+    (or error success)
+    ))
+
+(defn wrap-result [re-eval error success]
+  (->AResult re-eval error success))
+
 (defonce last-id (atom 0))
 (defn genid []
   (swap! last-id inc))
@@ -132,66 +160,75 @@
      body)))
 
 (defeffect ::group-selection [$elements result selection]
-  (when result
-    (let [result (iv/-unwrap result)]
-      (when (vector? result)
-        (dispatch! :update
-                   $elements
-                   (fn [elements]
-                     (let [selected? (fn [elem]
-                                       (selection (:element/id elem)))
-                           
-                           select-results (comp
-                                           (map first)
-                                           (filter selected?))
-                           minx (transduce (comp select-results
-                                                 (map :element/x))
-                                           min
-                                           Long/MAX_VALUE
-                                           result)
-                           miny (transduce (comp select-results
-                                                 (map :element/y))
-                                           min
-                                           Long/MAX_VALUE
-                                           result)
-                           by-id (into {}
-                                       (comp select-results
-                                             (map (juxt :element/id identity)))
-                                       result)
-                           group-elems (into []
-                                             (comp (filter selected?)
-                                                   (map (fn [elem]
-                                                          (let [evaled-elem (by-id (:element/id elem))]
-                                                            
-                                                            (update elem
-                                                                    ::properties
-                                                                    (fn [props]
-                                                                      (assoc props
-                                                                             :element/x (->buf (- (:element/x evaled-elem)
-                                                                                                  minx))
-                                                                             :element/y (->buf (- (:element/y evaled-elem)
-                                                                                                  miny)))))))))
-                                             elements)
-                           
-                           group #:element{:type :element/group
-                                           :id (genid)
-                                           :children (into []
-                                                           (comp (map wrap-properties)
-                                                                 (map #(dissoc % ::properties)))
-                                                           
-                                                           group-elems)
+  (when (and result
+             (-success result))
+    (dispatch! :update
+               $elements
+               (fn [elements]
+                 (let [selected? (fn [elem]
+                                   (selection (:element/id elem)))
+                       
+                       select-pos (comp (filter selected?)
+                                        (map wrap-properties)
+                                        (map (fn [m]
+                                               [(:element/id m)
+                                                (into {}
+                                                      (map (fn [k]
+                                                             [k (-success (-re-eval result (get m k)))]))
+                                                      [:element/x :element/y])])))
 
-                                           ::properties
-                                           #:element{
-                                                     :for-bindings (->buf nil)
-                                                     :layout (->buf nil) 
-                                                     :x (->buf (long minx))
-                                                     :y (->buf (long miny))
-                                                     :fills (->buf [])}}
-                           elements (into []
-                                          (remove selected?)
-                                          elements)]
-                       (conj elements group))))))))
+                       poss (into {}
+                                  select-pos
+                                  elements)
+
+                       minx (transduce (map #(-> % val :element/x))
+                                       min
+                                       Long/MAX_VALUE
+                                       poss)
+                       miny (transduce (map #(-> % val :element/y))
+                                       min
+                                       Long/MAX_VALUE
+                                       poss)
+                       
+                       group-elems (into []
+                                         (comp (filter selected?)
+                                               (map (fn [elem]
+                                                      (let [eid (:element/id elem)
+                                                            original-x (-> (get poss eid)
+                                                                           :element/x)
+                                                            original-y (-> (get poss eid)
+                                                                           :element/y)]
+                                                        
+                                                        (update elem
+                                                                ::properties
+                                                                (fn [props]
+                                                                  (assoc props
+                                                                         :element/x (->buf (- original-x
+                                                                                              minx))
+                                                                         :element/y (->buf (- original-y
+                                                                                              miny)))))))))
+                                         elements)
+
+                       
+                       group #:element{:type :element/group
+                                       :id (genid)
+                                       :children (into []
+                                                       (comp (map wrap-properties)
+                                                             (map #(dissoc % ::properties)))
+                                                       
+                                                       group-elems)
+
+                                       ::properties
+                                       #:element{
+                                                 :for-bindings (->buf nil)
+                                                 :layout (->buf nil) 
+                                                 :x (->buf (long minx))
+                                                 :y (->buf (long miny))
+                                                 :fills (->buf [])}}
+                       elements (into []
+                                      (remove selected?)
+                                      elements)]
+                   (conj elements group))))))
 
 (defn new-label [[mx my]]
   #:element{:type :element/label
@@ -324,7 +361,7 @@
                      [(ui/spacer canvas-width canvas-height)
                       (ui/try-draw
                        (try
-                         (mapv second (iv/-unwrap result))
+                         (iv/-unwrap result)
                          (catch Exception e
                            nil))
                        (fn [& args]
@@ -657,16 +694,10 @@
         form (into []
                    (comp (map wrap-properties)
                          wrap-move
-                         (map (juxt
-                               (fn [m]
-                                 (def my-src-map (dissoc m ::properties
-                                                         :element/for-bindings))
-                                 my-src-map
-                                 )
-                               #(try
-                                  (s2/compile %)
-                                  (catch Exception e)
-                                  (catch AssertionError e)))))
+                         (map #(try
+                                 (s2/compile %)
+                                 (catch Exception e)
+                                 (catch AssertionError e))))
                    (:elements (:src row)))]
    (assoc row :form
           form)))
@@ -822,6 +853,51 @@
                         add-deps]))
 
 (def ^:dynamic *spreadsheet-bindings* nil)
+
+(defn calc-result [eval-ns row bindings]
+  (let [{:keys [sym form err]} row]
+    (if err
+      (let [v (atom nil)
+            result (wrap-result (fn [& args]
+                                  @v)
+                                err
+                                nil)]
+        (reset! v result)
+        result)
+      ;; else
+      (let [binding-code (into []
+                               (mapcat
+                                (fn [[sym _]]
+                                  [sym `(iv/-unwrap
+                                         (get *spreadsheet-bindings* (quote ~sym)))]))
+                               bindings)
+            re-eval (fn eval-fn [form]
+                      (let [eval-code `(let ~binding-code
+                                         ~form)]
+                        (binding [*spreadsheet-bindings* bindings]
+                          (try
+                            (wrap-result
+                             eval-fn
+                             nil
+                             (let [result (binding [*ns* eval-ns]
+                                            (eval eval-code))]
+                               (if (seqable? result)
+                                 (do
+                                   ;; pre-realize parts of lazy seqs
+                                   (bounded-count (max 10
+                                                       (+ (get row :height 1)
+                                                          ;; common chunk size
+                                                          32))
+                                                  result)
+                                   result)
+                                 result)))
+                            (catch Exception e
+                              (wrap-result eval-fn e nil))))))
+
+            result (re-eval form)]
+        result)))
+  )
+
 (defn calc-spreadsheet [eval-ns cache ss]
   (let [[env ss] (process-spreadsheet ss
                                       [(complete-env parse-row)
@@ -834,49 +910,15 @@
       (if-not ss
         [next-cache vals]
         (let [row (first ss)
-              {:keys [sym form err]} row]
-          (if err
-            [next-cache (assoc vals (:id row) (iv/wrap err))]
-            (let [binding-code (into []
-                                     (mapcat
-                                      (fn [[sym _]]
-                                        [sym `(iv/-unwrap
-                                               (get *spreadsheet-bindings* (quote ~sym)))]))
-                                     bindings)
-                  eval-code `(let ~binding-code
-                               ~form)
-                  ;; _ (prn eval-code)
-                  cache-key [sym form
-                             bindings]
-                  ;; _ (prn sym form (contains? cache cache-key))
-                  [err result]
-                  (if-let [[_ cached-result] (find cache cache-key)]
-                    [nil cached-result]
-                    (binding [*spreadsheet-bindings* bindings]
-                      (try
-                        [nil
-                         (iv/wrap
-                          (let [result (binding [*ns* eval-ns]
-                                         (eval eval-code))]
-                            (if (seqable? result)
-                              (do
-                                ;; pre-realize parts of lazy seqs
-                                (bounded-count (max 10
-                                                    (+ (get row :height 1)
-                                                       ;; common chunk size
-                                                       32))
-                                               result)
-                                result)
-                              result)
-                            ))]
-                        (catch Exception e
-                          [e nil]))))]
-              (if err
-                [next-cache (assoc vals (:id row) (iv/wrap err))]
-                (recur (next ss)
-                       (assoc vals (:id row) result)
-                       (assoc bindings sym result)
-                       (assoc next-cache cache-key result))))))))))
+              {:keys [sym form err]} row
+              cache-key [sym form err bindings]
+              result (if-let [result (get cache cache-key)]
+                       result
+                       (calc-result eval-ns row bindings))]
+          (recur (next ss)
+                   (assoc vals (:id row) result)
+                   (assoc bindings sym result)
+                   (assoc next-cache cache-key result)))))))
 
 (def pop-text
   "1 	New York[d] 	New York 	8,804,190 	8,175,133 	+7.69% 	300.5 sq mi 	778.3 km2 	29,298/sq mi 	11,312/km2 	40.66°N 73.93°W
