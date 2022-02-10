@@ -1,8 +1,13 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.10.3"}
         com.phronemophobic/membrane {:local/root "../membrane2"}
+        com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.9.31.0-beta"}
+
         com.phronemophobic/dev-db {:local/root "../dev-db"}
-        com.phronemophobic.membrane/pretty-view {:local/root "../pretty-view"}
+        com.phronemophobic.membrane/viscous {:local/root "../viscous"}
+
+        com.phronemophobic/clj-reddit {:local/root "../clj-reddit"}
+        com.phronemophobic/schematic {:local/root "../schematic"}
         org.clojure/core.async {:mvn/version "1.3.610"}
         mogenslund/liquid {:mvn/version "2.0.3"}
         org.clojure/tools.analyzer.jvm {:mvn/version "1.1.0"}
