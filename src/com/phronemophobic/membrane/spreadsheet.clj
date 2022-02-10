@@ -12,8 +12,8 @@
              :refer [defui
                      defeffect]]
             [membrane.skia :as backend]
-            [com.phronemophobic.membrane.pretty-view :refer [pretty]]
-            [com.phronemophobic.membrane.inspector :as iv]
+            [com.phronemophobic.viscous :as iv]
+            [com.phronemophobic.membrane.schematic2 :as s2]
             ;; [membrane.java2d :as backend]
             ;; [membrane.skija :as backend]
             [clojure.tools.analyzer.jvm :as ana.jvm]
@@ -22,8 +22,341 @@
   (:import java.io.PushbackReader)
   (:gen-class))
 
+(defonce last-id (atom 0))
+(defn genid []
+  (swap! last-id inc))
 
-(def pretty-memo (memoize pretty))
+(def read-string-memo (memoize read-string))
+(defmulti init-editor :editor)
+
+(defn ->str [buf-or-s]
+  (if (map? buf-or-s)
+    (buffer/text buf-or-s)
+    buf-or-s))
+
+(defn ->buf [x]
+  (buffer/buffer (pr-str x) {:mode :insert}))
+
+(defui wrap-resizing [{:keys [resizing?
+                              width
+                              height
+                              body]}]
+  (if-not resizing?
+    body
+    (ui/on
+     :mouse-up
+     (fn [_]
+       [[:set $resizing? false]])
+     :mouse-move-global
+     (fn [[x y]]
+       [[:set $width (max 1 (int (+ x 5)))]
+        [:set $height (max 1 (int (+ y 5)))]])
+     (ui/no-events
+      [body
+       (ui/with-color [0.2 0.2 0.2 0.2]
+         (ui/with-style :membrane.ui/style-stroke
+           (ui/rectangle width height)))
+       ]))))
+
+(defn wrap-properties [elem]
+  (into elem
+        (map (fn [[k v]]
+               [k (try
+                    (read-string-memo (->str v))
+                    (catch Exception e
+                      nil))]))
+        (::properties elem)))
+
+
+(defui radio-button [{:keys [text value selection]}]
+  (ui/on
+   :mouse-move (constantly nil)
+   :mouse-move-global (constantly nil) 
+   (basic/button {:hover? (= value selection)
+                  :text text
+                  :on-click
+                  (fn []
+                    [[:set $selection value]])})))
+
+(defui move-tool [{:keys [src body]}]
+  (let [elements (:elements src)
+        mouse-down (:mouse-down src)
+        mouse-temp (:mouse-temp src)
+        selection (:selection src)]
+    (ui/on
+     :mouse-down
+     (fn [pos]
+       
+       [[:set $mouse-down pos]])
+     :mouse-move
+     (fn [pos]
+       (when mouse-down
+         [[:set $mouse-temp pos]]))
+     :mouse-up
+     (fn [pos]
+       [[:set $mouse-temp nil]
+        [:set $mouse-down nil]
+        (when selection
+          [:update $elements
+           (fn [elements]
+             (let [ox (- (nth mouse-temp 0)
+                         (nth mouse-down 0))
+                   oy (- (nth mouse-temp 1)
+                         (nth mouse-down 1))]
+               (into []
+                     (map (fn [elem]
+                            (if (selection (:element/id elem))
+                              (-> elem
+                                  (update-in [::properties :element/x]
+                                             (fn [x]
+                                               (when x
+                                                 (->buf (long (+ ox (read-string (->str x))))))))
+                                  (update-in [::properties :element/y]
+                                             (fn [y]
+                                               (when y
+                                                 (->buf (long (+ oy (read-string (->str y)))))))))
+                              elem)))
+                     elements))
+             )])
+        ])
+     body)))
+
+(defui add-tool [{:keys [src body new-element]}]
+  (let [elements (:elements src)]
+    (ui/on
+     :mouse-down
+     (fn [pos]
+       [[:update $elements conj
+         (merge (new-element pos)
+                {:element/id (genid)})]])
+     body)))
+
+(defeffect ::group-selection [$elements result selection]
+  (when result
+    (let [result (iv/-unwrap result)]
+      (when (vector? result)
+        (dispatch! :update
+                   $elements
+                   (fn [elements]
+                     (let [selected? (fn [elem]
+                                       (selection (:element/id elem)))
+                           
+                           select-results (comp
+                                           (map first)
+                                           (filter selected?))
+                           minx (transduce (comp select-results
+                                                 (map :element/x))
+                                           min
+                                           Long/MAX_VALUE
+                                           result)
+                           miny (transduce (comp select-results
+                                                 (map :element/y))
+                                           min
+                                           Long/MAX_VALUE
+                                           result)
+                           by-id (into {}
+                                       (comp select-results
+                                             (map (juxt :element/id identity)))
+                                       result)
+                           group-elems (into []
+                                             (comp (filter selected?)
+                                                   (map (fn [elem]
+                                                          (let [evaled-elem (by-id (:element/id elem))]
+                                                            
+                                                            (update elem
+                                                                    ::properties
+                                                                    (fn [props]
+                                                                      (assoc props
+                                                                             :element/x (->buf (- (:element/x evaled-elem)
+                                                                                                  minx))
+                                                                             :element/y (->buf (- (:element/y evaled-elem)
+                                                                                                  miny)))))))))
+                                             elements)
+                           
+                           group #:element{:type :element/group
+                                           :id (genid)
+                                           :children (into []
+                                                           (comp (map wrap-properties)
+                                                                 (map #(dissoc % ::properties)))
+                                                           
+                                                           group-elems)
+
+                                           ::properties
+                                           #:element{
+                                                     :for-bindings (->buf nil)
+                                                     :layout (->buf nil) 
+                                                     :x (->buf (long minx))
+                                                     :y (->buf (long miny))
+                                                     :fills (->buf [])}}
+                           elements (into []
+                                          (remove selected?)
+                                          elements)]
+                       (conj elements group))))))))
+
+(defn new-label [[mx my]]
+  #:element{:type :element/label
+            :id (genid)
+            ::properties
+            #:element{
+                      :x (->buf (long mx))
+                      :y (->buf (long my))
+                      :fills (->buf [{}])
+                      :font (->buf {:font/size 14})
+                      :text (->buf "hello")}})
+
+(defn new-rect [[mx my]]
+  #:element{:type :element/shape
+            :id (genid)
+            ::properties
+            #:element{
+                      :x (->buf (long mx))
+                      :y (->buf (long my))
+                      :width (->buf 15)
+                      :height (->buf 20)
+                      :fills (->buf [{}]) 
+                      :corner-radius (->buf 3)}})
+
+
+(defn new-code [[mx my]]
+  #:element{:type :element/code
+            :id (genid)
+            ::properties
+            #:element{
+                      :x (->buf (long mx))
+                      :y (->buf (long my))
+                      :form (->buf '(ui/label ":)"))}})
+
+(defui wrap-tool [{:keys [width height tool src body]}]
+  (basic/scrollview
+   {:scroll-bounds [width height]
+    :body
+    (case tool
+
+      :rect
+      (add-tool {:src src
+                 :body body
+                 :new-element new-rect})
+
+      :label
+      (add-tool {:src src
+                 :body body
+                 :new-element new-label})
+
+      :code
+      (add-tool {:src src
+                 :body body
+                 :new-element new-code})
+
+      :move
+      (move-tool
+       {:src src
+        :body body})
+      
+      (add-tool {:src src
+                 :body body
+                 :new-element new-label}))}))
+
+(defui canvas-editor [{:keys [src result  tool
+                              ^:membrane.component/contextual
+                              shift-down?]}]
+  
+  (let [elements (:elements src)
+        mouse-down (:mouse-down src)
+        mouse-temp (:mouse-temp src)
+        selection (get src :selection #{})
+
+        canvas-width (get extra :canvas-width 400)
+        canvas-height (get extra :canvas-height 400)
+        resizing? (get extra :resizing? false)]
+    (vertical-layout
+     (ui/horizontal-layout
+      (radio-button {:text "Move"
+                     :value :move
+                     :selection tool})
+      (radio-button {:text "Label"
+                     :value :label
+                     :selection tool})
+      (radio-button {:text "rect"
+                     :value :rect
+                     :selection tool})
+      (radio-button {:text "code"
+                     :value :code
+                     :selection tool})
+      (basic/button {:text "group"
+                     :on-click
+                     (fn []
+                       [[:set $selection #{}]
+                        [::group-selection $elements result selection]])})
+      (basic/button {:text "resize"
+                     :on-click
+                     (fn []
+                       [[:set $resizing? true]])}))
+     
+     (ui/horizontal-layout
+      (apply
+       ui/vertical-layout
+       (for [element elements]
+         (let [lbl (ui/on
+                    :mouse-down
+                    (fn [_]
+                      (if shift-down?
+                        [[:update $selection conj (:element/id element)]]
+                        [[:set $selection #{(:element/id element)}]]))
+                    (ui/label (:element/id element)))]
+           (ui/horizontal-layout
+            (ui/on
+             :mouse-down
+             (fn [_]
+               [[:set $selection #{}]
+                [:delete $element]])
+             (ui/label "X" (assoc (ui/font "Menlo" 10)
+                                  :weight :bold)))
+            (ui/spacer 3 0)
+            (if (get selection (:element/id element))
+              (ui/with-color [1 0 0]
+                lbl)
+              lbl)))))
+
+      [(ui/with-style :membrane.ui/style-stroke
+         (ui/rectangle canvas-width canvas-height))
+       (when result
+         (let [body (ui/no-events
+                     [(ui/spacer canvas-width canvas-height)
+                      (ui/try-draw
+                       (try
+                         (mapv second (iv/-unwrap result))
+                         (catch Exception e
+                           nil))
+                       (fn [& args]
+                         nil))])]
+          (if resizing?
+            (wrap-resizing
+             {:width canvas-width
+              :height canvas-height
+              :resizing? resizing?
+              :body body})
+            (wrap-tool {:width canvas-width
+                        :height canvas-height
+                        :tool tool
+                        :src src
+                        :body body})))
+         
+         
+         )]
+      (let [selected-id (first selection)]
+        (when selected-id
+          (let [idx (some (fn [[i elem]]
+                            (when (= selected-id (:element/id elem))
+                              i))
+                          (map-indexed vector elements))
+                rect (nth elements idx)]
+            (let [properties (::properties rect)]
+              (apply
+               ui/vertical-layout
+               (for-kv [[k v] properties]
+                 (ui/horizontal-layout
+                  (ui/label k)
+                  (code-editor/text-editor {:buf v}))))))))))))
 
 (defeffect ::inspect-result [result]
   (tap> result))
@@ -35,46 +368,148 @@
                   :on-click (fn []
                               [[:delete $row]])})
    (basic/textarea {:text (:name row)})
-   (code-editor/text-editor {:buf (:src row)})
+   (case (:editor row)
+
+     :code-editor
+     (code-editor/text-editor {:buf (:src row)})
+
+     :canvas
+     (canvas-editor {:src (:src row)
+                     :result result})
+
+     :number-slider
+     (basic/number-slider {:num (:src row)
+                           :max-width 100
+                           :min 0
+                           :max 100
+                           :integer? true}))
    (let [inspector-extra (get extra [:inspector (:id row)])
-         pv #_(ui/no-events
-               (ui/->Cached (pretty-memo result)))
-         (iv/inspector {:obj (or result
-                                 (iv/wrap nil))
-                        :width (get inspector-extra :width 40)
-                        :height (get inspector-extra :height 1)
-                        :extra inspector-extra
-                        })
-         [w h] (ui/bounds pv)]
-     pv
-     #_(ui/on
-        :mouse-down
-        (fn [_]
-          [[::inspect-result result]])
-        (ui/scissor-view [0 0]
-                         [(min w 400)
-                          (min h 200)]
-                         pv)))))
+         view-toggle (get extra :view-toggle false)
+         pv
+         (if view-toggle
+           (when result
+             (ui/no-events
+              (ui/try-draw
+               (iv/-unwrap result)
+               (constantly nil))))
+           (iv/inspector {:obj (or result
+                                   (iv/wrap nil))
+                          :width (get inspector-extra :width 40)
+                          :height (get row :height 1)
+                          :show-context? (get inspector-extra :show-context?)
+                          :extra inspector-extra
+                          }))
+         [w h] (ui/bounds pv)
+         toggle-view (ui/on
+                      :mouse-down
+                      (fn [_]
+                        [[:update $view-toggle not]])
+                      (ui/filled-rectangle [1 0 1 0.5]
+                                           8 8))]
+     [
+      pv
+      (ui/translate (- w 8) 0
+                    toggle-view)
+      ])))
+
+(defeffect ::insert-spreadsheet-row [$spreadsheet row-id editor-type]
+  (dispatch! :update $spreadsheet
+             (fn [spreadsheet]
+               (into []
+                     cat
+                     [(take-while #(not= row-id (:id %)) spreadsheet)
+                      [(init-editor {:name (name (gensym))
+                                     :id (gensym)
+                                     :editor editor-type} )]
+                      (drop-while #(not= row-id (:id %)) spreadsheet)]))))
 
 (defeffect ::add-spreadsheet-row [$spreadsheet]
   (dispatch! :update $spreadsheet conj
              {:name (name (gensym))
               :id (gensym)
+              :editor :code-editor
               :src (buffer/buffer "42" {:mode :insert})}))
 
-(defui spreadsheet-editor [{:keys [ss results]}]
-  (vertical-layout
-   (basic/button {:text "+"
-                  :on-click (fn []
-                              [[::add-spreadsheet-row $ss]])})
-   (basic/scrollview
-    {:scroll-bounds [1200 800]
-     :body
-     (apply vertical-layout
-            (for [row ss]
-              (spreadsheet-row {:row row
-                                :result (get results (:id row))})))
-     })))
+(defeffect ::add-spreadsheet-row-number-slider [$spreadsheet]
+  (dispatch! :update $spreadsheet conj
+             {:name (name (gensym))
+              :id (gensym)
+              :editor :number-slider
+              :src 12}))
+
+
+(defeffect ::add-spreadsheet-row-canvas [$spreadsheet]
+  (dispatch! :update $spreadsheet conj
+             {:name (name (gensym))
+              :id (gensym)
+              :editor :canvas
+              :src {:elements [#:element{:type :element/shape
+                                         :id (genid)
+                                         ::properties
+                                         #:element{
+                                                   :x (->buf 5)
+                                                   :y (->buf 10)
+                                                   :width (->buf 15)
+                                                   :height (->buf 20)
+                                                   :fills (->buf [{}]) 
+                                                   :corner-radius (->buf 3)}}]}}))
+
+(defui spreadsheet-editor [{:keys [ss results
+
+                                   ]}]
+  (ui/wrap-on
+   :key-event
+   (fn [handler key scancode actions mods]
+     (let [intents (handler key scancode actions mods)
+           shift-down? (get context :shift-down?)
+           shift? (= 1 (bit-and mods 1))]
+       (if (not= shift? shift-down?)
+         (conj intents [:set $shift-down? shift?])
+         intents)))
+   (vertical-layout
+    (basic/button {:text "+"
+                   :on-click (fn []
+                               [[::add-spreadsheet-row $ss]])})
+
+    (basic/button {:text "+42"
+                   :on-click (fn []
+                               [[::add-spreadsheet-row-number-slider $ss]])})
+    (basic/button {:text "+[]"
+                   :on-click (fn []
+                               [[::add-spreadsheet-row-canvas $ss]])})
+    (basic/scrollview
+     {:scroll-bounds [1200 800]
+      :body
+      (vertical-layout
+       (apply vertical-layout
+              (for [row ss]
+                (let [srow (spreadsheet-row {:row row
+                                             :result (get results (:id row))})
+                      srow-width 23]
+                  (vertical-layout
+                   (let [hover? (get extra [$row :hover])]
+                     (basic/on-hover
+                      {:hover? hover?
+                       :body (if hover?
+                               (horizontal-layout
+                                (basic/button {:text "+"
+                                               :on-click (fn []
+                                                           [[::insert-spreadsheet-row  $ss (:id row) :code-editor]])})
+
+                                (basic/button {:text "+42"
+                                               :on-click (fn []
+                                                           [[::insert-spreadsheet-row $ss (:id row) :number-slider]])})
+                                (basic/button {:text "+[]"
+                                               :on-click (fn []
+                                                           [[::insert-spreadsheet-row $ss (:id row) :canvas]])}))
+                             
+                               ;;(ui/spacer srow-width 5)
+                               (ui/rectangle srow-width 5)
+                               )}))
+                   srow
+                   ))))
+       (ui/spacer 0 300))
+      }))))
 
 (defonce spreadsheet-state (atom {}))
 
@@ -92,83 +527,176 @@
 10 	San Jose 	 California 	1,021,795 	945,942 	+8.02% 	177.5 sq mi 	459.7 km2 	5,777/sq mi 	2,231/km2 	37.2967°N 121.8189°W")
 
 (declare calc-spreadsheet)
-(defn run-results []
-  (let [[old _] (swap-vals! spreadsheet-state dissoc :ss-chan :result-thread)]
-    (when-let [ss-chan (:ss-chan old)]
-      (async/close! ss-chan)))
+(defn run-results
+  ([]
+   (run-results *ns*))
+  ([eval-ns]
+   (let [[old _] (swap-vals! spreadsheet-state dissoc :ss-chan :result-thread)]
+     (when-let [ss-chan (:ss-chan old)]
+       (async/close! ss-chan)))
 
-  (let [ss-chan (async/chan (async/sliding-buffer 1))
-        result-thread (let [binds (clojure.lang.Var/getThreadBindingFrame)]
-                        (doto (Thread. (fn []
-                                         (clojure.lang.Var/resetThreadBindingFrame binds)
-                                         (loop []
-                                           (when-let [ss (async/<!! ss-chan)]
-                                             (try
-                                               (let [cache (get @spreadsheet-state :cache {})
-                                                     [next-cache results] (calc-spreadsheet cache ss)]
-                                                 (swap! spreadsheet-state assoc
-                                                        :results results
-                                                        :cache next-cache))
-                                               (catch Exception e
-                                                 (prn e)))
-                                             (recur))))
-                                       "Result-Thread")))]
-    (swap! spreadsheet-state
-           assoc
-           :ss-chan ss-chan
-           :result-thread result-thread)
-    (.start result-thread)
+   (let [ss-chan (async/chan (async/sliding-buffer 1))
+         result-thread (let [binds (clojure.lang.Var/getThreadBindingFrame)]
+                         (doto (Thread. (fn []
+                                          (clojure.lang.Var/resetThreadBindingFrame binds)
+                                          (loop []
+                                            (when-let [ss (async/<!! ss-chan)]
+                                              (try
+                                                (let [cache (get @spreadsheet-state :cache {})
+                                                      [next-cache results] (calc-spreadsheet eval-ns cache ss)]
+                                                  (swap! spreadsheet-state assoc
+                                                         :results results
+                                                         :cache next-cache)
+                                                  (#'backend/glfw-post-empty-event))
+                                                (catch Exception e
+                                                  (prn e)))
+                                              (recur))))
+                                        "Result-Thread")))]
+     (swap! spreadsheet-state
+            assoc
+            :ss-chan ss-chan
+            :result-thread result-thread)
+     (.start result-thread)
 
-    (add-watch spreadsheet-state ::update-results
-               (fn check-update-results [key ref old new]
-                 (let [ss (:ss new)]
-                   (when-not (= (:ss new)
-                                (:ss old))
-                     (async/put! ss-chan (:ss new))))))
-    nil))
+     (add-watch spreadsheet-state ::update-results
+                (fn check-update-results [key ref old new]
+                  (let [ss (:ss new)]
+                    (when-not (= (:ss new)
+                                 (:ss old))
+                      (async/put! ss-chan (:ss new))))))
+     nil)))
 
 (def my-spreadsheet
   [{:name "s"
     :id 1
+    :editor :code-editor
     :src (buffer/buffer "(+ 1 2)" {:mode :insert})}
    {:name "s"
     :id 2
+    :editor :code-editor
     :src (buffer/buffer "(+ s 2)" {:mode :insert})}
    {:name "t"
     :id 3
+    :editor :code-editor
     :src (buffer/buffer "1234" {:mode :insert})}
    {:name "u"
     :id 4
+    :editor :code-editor
     :src (buffer/buffer "(+ s t)" {:mode :insert})}
    ])
-(swap! spreadsheet-state
-       assoc :ss my-spreadsheet)
+(defn init-spreadsheet []
+  (swap! spreadsheet-state
+         assoc :ss my-spreadsheet))
+(init-spreadsheet)
 
 (defn current-spreadsheet []
   (:ss @spreadsheet-state))
 (defn run []
-  ;; (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state))
+  (run-results *ns*)
   (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state)))
 
 
-(defn ->str [buf-or-s]
-  (if (map? buf-or-s)
-    (buffer/text buf-or-s)
-    buf-or-s))
 
-(def read-string-memo (memoize read-string))
 
-(defn parse-row [row]
+
+
+
+
+
+(defmulti parse-src :editor)
+(defmethod parse-src :code-editor [row]
   (let [src (:src row)
-        row (assoc row :src (->str src))
         [err form] (try
-                     [nil (read-string-memo (:src row))]
+                     [nil (read-string-memo (->str (:src row)))]
                      (catch Exception e
                        [e nil]))]
     (if err
       (assoc row :err err)
-      (let [row (assoc row :form form)
-            [err sym] (try
+      (assoc row :form form))))
+(defmethod init-editor :code-editor [row]
+  (merge row
+         {:src (buffer/buffer "42" {:mode :insert})}))
+
+
+(defmethod parse-src :number-slider [row]
+  (let [src (:src row)]
+    (assoc row :form (or src 42))))
+(defmethod init-editor :number-slider [row]
+  (merge row
+         {:src 12}))
+
+
+(defmethod parse-src :canvas [row]
+  (let [
+        src (:src row)
+        mouse-down (:mouse-down src)
+        mouse-temp (:mouse-temp src)
+        selection (:selection src)
+        wrap-move (if (and selection
+                           mouse-down
+                           mouse-temp)
+                    (let [ox (- (nth mouse-temp 0)
+                                (nth mouse-down 0))
+                          oy (- (nth mouse-temp 1)
+                                (nth mouse-down 1))]
+
+                      (map (fn [elem]
+                             (if (selection (:element/id elem))
+                               (-> elem
+                                   (update :element/x
+                                           (fn [x]
+                                             (when x
+                                               `(+ ~ox ~x))))
+                                   (update :element/y
+                                           (fn [y]
+                                             (when y
+                                               `(+ ~oy ~y)))))
+                               elem))))
+                    identity)
+
+        form (into []
+                   (comp (map wrap-properties)
+                         wrap-move
+                         (map (juxt
+                               (fn [m]
+                                 (def my-src-map (dissoc m ::properties
+                                                         :element/for-bindings))
+                                 my-src-map
+                                 )
+                               #(try
+                                  (s2/compile %)
+                                  (catch Exception e)
+                                  (catch AssertionError e)))))
+                   (:elements (:src row)))]
+   (assoc row :form
+          form)))
+(defmethod init-editor :canvas [row]
+  (merge row
+         {:src {:elements [#:element{:type :element/shape
+                                         :id (genid)
+
+
+                                         ::properties
+                                         #:element{
+                                                   :x (->buf 5)
+                                                   :y (->buf 10)
+                                                   :width (->buf 15)
+                                                   :height (->buf 20)
+                                                   :fills (->buf [{}]) 
+                                                   :corner-radius (->buf 3)}}]}}))
+
+(defn parse-row [row]
+  (let [ ;; src (:src row)
+        ;; row (assoc row :src (->str src))
+        ;; [err form] (try
+        ;;              [nil (read-string-memo (:src row))]
+        ;;              (catch Exception e
+        ;;                [e nil]))
+
+        row (parse-src row)]
+    (if (:err row)
+      row
+      (let [[err sym] (try
                         (let [sym (read-string (:name row))]
                           (assert (and (symbol? sym)
                                        (not (qualified-symbol? sym)))
@@ -294,8 +822,7 @@
                         add-deps]))
 
 (def ^:dynamic *spreadsheet-bindings* nil)
-(def eval-ns *ns*)
-(defn calc-spreadsheet [cache ss]
+(defn calc-spreadsheet [eval-ns cache ss]
   (let [[env ss] (process-spreadsheet ss
                                       [(complete-env parse-row)
                                        process-make-fn
@@ -321,7 +848,7 @@
                   ;; _ (prn eval-code)
                   cache-key [sym form
                              bindings]
-                  _ (prn sym form (contains? cache cache-key))
+                  ;; _ (prn sym form (contains? cache cache-key))
                   [err result]
                   (if-let [[_ cached-result] (find cache cache-key)]
                     [nil cached-result]
@@ -329,8 +856,19 @@
                       (try
                         [nil
                          (iv/wrap
-                          (binding [*ns* eval-ns]
-                            (eval eval-code)))]
+                          (let [result (binding [*ns* eval-ns]
+                                         (eval eval-code))]
+                            (if (seqable? result)
+                              (do
+                                ;; pre-realize parts of lazy seqs
+                                (bounded-count (max 10
+                                                    (+ (get row :height 1)
+                                                       ;; common chunk size
+                                                       32))
+                                               result)
+                                result)
+                              result)
+                            ))]
                         (catch Exception e
                           [e nil]))))]
               (if err
@@ -384,9 +922,10 @@
 41 	Raleigh 	North Carolina 	467,665 	403,892 	+15.79% 	145.1 sq mi 	375.8 km2 	3,179/sq mi 	1,227/km2 	35.83°N 78.64°W")
 
 (defn -main [& args]
-  (run-results)
+
   (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state))
   )
+
 
 (defn get-ss []
   (-> @spreadsheet-state
