@@ -14,6 +14,7 @@
             [membrane.skia :as backend]
             [com.phronemophobic.viscous :as iv]
             [com.phronemophobic.membrane.schematic2 :as s2]
+            [com.rpl.specter :as spec]
             ;; [membrane.java2d :as backend]
             ;; [membrane.skija :as backend]
             [clojure.tools.analyzer.jvm :as ana.jvm]
@@ -21,6 +22,11 @@
             [liq.buffer :as buffer])
   (:import java.io.PushbackReader)
   (:gen-class))
+
+(def ELEMENT-TREE-WALKER
+  (spec/recursive-path [] p
+                       (spec/stay-then-continue
+                        [(spec/must :element/children) spec/ALL p])))
 
 (defprotocol IResult
   (-re-eval [this form])
@@ -212,11 +218,7 @@
                        
                        group #:element{:type :element/group
                                        :id (genid)
-                                       :children (into []
-                                                       (comp (map wrap-properties)
-                                                             (map #(dissoc % ::properties)))
-                                                       
-                                                       group-elems)
+                                       :children group-elems
 
                                        ::properties
                                        #:element{
@@ -229,6 +231,15 @@
                                       (remove selected?)
                                       elements)]
                    (conj elements group))))))
+
+(defeffect ::add-property [$properties $kw-str kw-str]
+  (when-let [prop (try
+                    (read-string kw-str)
+                    (catch Exception e
+                      nil))]
+    (when (keyword? prop)
+      (dispatch! :update $properties assoc prop (->buf nil))
+      (dispatch! :set $kw-str ""))))
 
 (defn new-label [[mx my]]
   #:element{:type :element/label
@@ -293,9 +304,55 @@
                  :body body
                  :new-element new-label}))}))
 
+
+(defui element-selector [{:keys [elements selection
+                                 ^:membrane.component/contextual
+                                 shift-down?
+                                 ]}])
+(defui element-selector [{:keys [elements selection
+                                 ^:membrane.component/contextual
+                                 shift-down?
+                                 ]}]
+  (apply
+   ui/vertical-layout
+   (for [element elements]
+     (let [lbl (ui/on
+                :mouse-down
+                (fn [_]
+                  (if shift-down?
+                    [[:update $selection conj (:element/id element)]]
+                    [[:set $selection #{(:element/id element)}]]))
+                (ui/label (:element/id element)))]
+       (ui/horizontal-layout
+        (ui/on
+         :mouse-down
+         (fn [_]
+           [[:set $selection #{}]
+            [:delete $element]])
+         (ui/label "X" (assoc (ui/font "Menlo" 10)
+                              :weight :bold)))
+        
+        (ui/spacer 3 0)
+        (vertical-layout
+         (if (get selection (:element/id element))
+           (ui/with-color [1 0 0]
+             lbl)
+           lbl)
+         (let [children (:element/children element)]
+           (when children
+             (ui/translate 5 0
+                           (element-selector {:elements children
+                                              :selection selection})))))))))
+  )
+
+(defn matches-id? [id]
+  (fn [m]
+    (= id (:element/id m))))
+(def matches-id?-memo (memoize matches-id?))
+
 (defui canvas-editor [{:keys [src result  tool
-                              ^:membrane.component/contextual
-                              shift-down?]}]
+
+                              ]}]
   
   (let [elements (:elements src)
         mouse-down (:mouse-down src)
@@ -330,30 +387,9 @@
                        [[:set $resizing? true]])}))
      
      (ui/horizontal-layout
-      (apply
-       ui/vertical-layout
-       (for [element elements]
-         (let [lbl (ui/on
-                    :mouse-down
-                    (fn [_]
-                      (if shift-down?
-                        [[:update $selection conj (:element/id element)]]
-                        [[:set $selection #{(:element/id element)}]]))
-                    (ui/label (:element/id element)))]
-           (ui/horizontal-layout
-            (ui/on
-             :mouse-down
-             (fn [_]
-               [[:set $selection #{}]
-                [:delete $element]])
-             (ui/label "X" (assoc (ui/font "Menlo" 10)
-                                  :weight :bold)))
-            (ui/spacer 3 0)
-            (if (get selection (:element/id element))
-              (ui/with-color [1 0 0]
-                lbl)
-              lbl)))))
-
+      
+      (element-selector {:elements elements
+                         :selection selection})
       [(ui/with-style :membrane.ui/style-stroke
          (ui/rectangle canvas-width canvas-height))
        (when result
@@ -361,35 +397,44 @@
                      [(ui/spacer canvas-width canvas-height)
                       (ui/try-draw
                        (try
-                         (iv/-unwrap result)
+                         (when-let [result (-success result)]
+                           result)
                          (catch Exception e
                            nil))
                        (fn [& args]
-                         nil))])]
-          (if resizing?
-            (wrap-resizing
-             {:width canvas-width
-              :height canvas-height
-              :resizing? resizing?
-              :body body})
-            (wrap-tool {:width canvas-width
-                        :height canvas-height
-                        :tool tool
-                        :src src
-                        :body body})))
+                         nil))
+                      ])]
+           (if resizing?
+             (wrap-resizing
+              {:width canvas-width
+               :height canvas-height
+               :resizing? resizing?
+               :body body})
+             (wrap-tool {:width canvas-width
+                         :height canvas-height
+                         :tool tool
+                         :src src
+                         :body body})))
          
          
          )]
       (let [selected-id (first selection)]
         (when selected-id
-          (let [idx (some (fn [[i elem]]
-                            (when (= selected-id (:element/id elem))
-                              i))
-                          (map-indexed vector elements))
-                rect (nth elements idx)]
-            (let [properties (::properties rect)]
+          (let [path [spec/ALL
+                      ELEMENT-TREE-WALKER
+                      (matches-id?-memo selected-id)]
+                element (spec/select-one path elements)]
+            (let [properties (::properties element)
+                  kw-str (get extra [$element ::kw-str ""])
+                  ]
               (apply
                ui/vertical-layout
+               (ui/horizontal-layout
+                (basic/button {:text "+"
+                               :on-click (fn []
+                                           (when (seq kw-str)
+                                            [[::add-property $properties $kw-str kw-str]]))})
+                (basic/textarea {:text kw-str}))
                (for-kv [[k v] properties]
                  (ui/horizontal-layout
                   (ui/label k)
@@ -404,6 +449,7 @@
    (basic/button {:text "X"
                   :on-click (fn []
                               [[:delete $row]])})
+   (basic/checkbox {:checked? (:def row)})
    (basic/textarea {:text (:name row)})
    (case (:editor row)
 
@@ -427,7 +473,8 @@
            (when result
              (ui/no-events
               (ui/try-draw
-               (iv/-unwrap result)
+               (when-let [result (-success result)]
+                 result)
                (constantly nil))))
            (iv/inspector {:obj (or result
                                    (iv/wrap nil))
@@ -690,15 +737,18 @@
                                                `(+ ~oy ~y)))))
                                elem))))
                     identity)
-
+        elements (:elements (:src row))
+        elements (spec/transform [spec/ALL
+                                  ELEMENT-TREE-WALKER]
+                                 wrap-properties
+                                 elements)
         form (into []
-                   (comp (map wrap-properties)
-                         wrap-move
+                   (comp wrap-move
                          (map #(try
                                  (s2/compile %)
                                  (catch Exception e)
                                  (catch AssertionError e))))
-                   (:elements (:src row)))]
+                   elements)]
    (assoc row :form
           form)))
 (defmethod init-editor :canvas [row]
@@ -871,6 +921,11 @@
                                   [sym `(iv/-unwrap
                                          (get *spreadsheet-bindings* (quote ~sym)))]))
                                bindings)
+            form (if (:def row)
+                   `(let [result# ~form]
+                      (def ~sym result#)
+                      result#)
+                   form)
             re-eval (fn eval-fn [form]
                       (let [eval-code `(let ~binding-code
                                          ~form)]
