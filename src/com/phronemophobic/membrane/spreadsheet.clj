@@ -337,7 +337,9 @@
                   (if shift-down?
                     [[:update $selection conj (:element/id element)]]
                     [[:set $selection #{(:element/id element)}]]))
-                (ui/label (:element/id element)))]
+                (ui/label
+                 (or (:element/name element)
+                     (:element/id element))))]
        (ui/horizontal-layout
         (ui/on
          :mouse-down
@@ -444,6 +446,7 @@
                   ]
               (apply
                ui/vertical-layout
+               (basic/textarea {:text (:element/name element)})
                (ui/horizontal-layout
                 (basic/button {:text "+"
                                :on-click (fn []
