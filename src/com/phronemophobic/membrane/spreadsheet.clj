@@ -891,19 +891,26 @@
   (fn [env row]
     [env (proc row)]))
 
-(defn process-spreadsheet [spreadsheet procs]
-  (reduce
-   (fn [[env rows] row]
-     (let [[env row]
-           (reduce (fn [[env ret] f]
-                     (f env ret))
-                   [env row]
-                   procs)
-           rows (conj rows row)]
-       [(assoc env :rows rows)
-        rows]))
-   [{} []]
-   spreadsheet))
+(defn process-spreadsheet
+  ([spreadsheet]
+   (process-spreadsheet spreadsheet
+                        [(complete-env parse-row)
+                         process-make-fn
+                         process-make-component
+                         add-deps]))
+  ([spreadsheet procs]
+   (reduce
+    (fn [[env rows] row]
+      (let [[env row]
+            (reduce (fn [[env ret] f]
+                      (f env ret))
+                    [env row]
+                    procs)
+            rows (conj rows row)]
+        [(assoc env :rows rows)
+         rows]))
+    [{} []]
+    spreadsheet)))
 
 
 (comment
