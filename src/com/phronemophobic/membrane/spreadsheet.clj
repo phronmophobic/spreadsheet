@@ -754,8 +754,9 @@
         form (into []
                    (comp wrap-move
                          (map #(try
-                                 (s2/compile %)
-                                 (catch Exception e)
+                                 (s2/compile-memo %)
+                                 (catch Exception e
+                                   (prn e))
                                  (catch AssertionError e))))
                    elements)]
    (assoc row :form
