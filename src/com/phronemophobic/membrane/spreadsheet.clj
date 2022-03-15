@@ -1041,6 +1041,14 @@
   )
 
 
+(defn print-forms []
+  (clojure.pprint/pprint
+   (-> @spreadsheet-state
+       :ss
+       process-spreadsheet
+       second
+       (->> (map (juxt :name :form))))))
+
 (defn get-ss []
   (-> @spreadsheet-state
       :ss))
