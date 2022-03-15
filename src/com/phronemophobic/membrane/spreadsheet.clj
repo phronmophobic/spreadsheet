@@ -678,7 +678,8 @@
    ])
 (defn init-spreadsheet []
   (swap! spreadsheet-state
-         assoc :ss my-spreadsheet))
+         assoc :ss my-spreadsheet)
+  nil)
 (init-spreadsheet)
 
 (defn current-spreadsheet []
