@@ -14,3 +14,6 @@
 .hgignore
 .hg/
 todo.org
+*.gif
+*.mov
+/*.edn
