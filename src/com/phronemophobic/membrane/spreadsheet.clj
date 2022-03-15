@@ -451,10 +451,16 @@
                 (basic/button {:text "+"
                                :on-click (fn []
                                            (when (seq kw-str)
-                                            [[::add-property $properties $kw-str kw-str]]))})
+                                             [[::add-property $properties $kw-str kw-str]]))})
                 (basic/textarea {:text kw-str}))
                (for-kv [[k v] properties]
                  (ui/horizontal-layout
+                  (ui/on
+                   :mouse-down
+                   (fn [_]
+                     [[:update $properties dissoc k]])
+                   (ui/label "X" (assoc (ui/font "Menlo" 10)
+                                        :weight :bold)))
                   (ui/label k)
                   (code-editor/text-editor {:buf v}))))))))))))
 
