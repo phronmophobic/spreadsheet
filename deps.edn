@@ -27,7 +27,8 @@
                          com.phronemophobic/clj-reddit {:local/root "../clj-reddit"}}
             :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
                        "-Djdk.attach.allowAttachSelf=true"
-                       "-XX:+DebugNonSafepoints"]}
+                       "-XX:+DebugNonSafepoints"
+                       "-Xmx8096M"]}
 
   :test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}}}
