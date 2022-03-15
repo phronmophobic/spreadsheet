@@ -23,6 +23,15 @@
   (:import java.io.PushbackReader)
   (:gen-class))
 
+(defmacro with-refs [ref-names & body]
+  `(let ~(into
+          []
+          cat
+          (for [nm ref-names
+                :when (symbol? nm)]
+            [nm nil]))
+     ~@body))
+
 (def ELEMENT-TREE-WALKER
   (spec/recursive-path [] p
                        (spec/stay-then-continue
