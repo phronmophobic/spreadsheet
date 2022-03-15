@@ -464,6 +464,43 @@
                   (ui/label k)
                   (code-editor/text-editor {:buf v}))))))))))))
 
+(defui user-defined-editor [{:keys [src result]}]
+  (let [component-name (get src :component-name (->buf ""))
+        initial-state-form (get src :initial-state-form (->buf nil))
+        state (get src ::user-defined-state)
+        user-defined-extra (get state ::extra)]
+    (ui/vertical-layout
+     (basic/button {:text "reset"
+                    :on-click (fn []
+                                [[:delete $state]])})
+     (ui/horizontal-layout
+      (code-editor/text-editor {:buf component-name})
+      (code-editor/text-editor {:buf initial-state-form}))
+     (when-let [result (and result
+                            (-success result))]
+       (try
+         (ui/try-draw
+          (let [component (:component result)
+                initial-state (:initial-state result)]
+            (when (and component initial-state)
+              (let [
+                    state (or state initial-state)
+                    state (into state
+                                (map (fn [k]
+                                       [(keyword (str "$" (name k)))
+                                        [$state k]]))
+                                (keys initial-state))
+                    state (assoc state
+                                 :extra user-defined-extra
+                                 :$extra $user-defined-extra
+                                 :context context
+                                 :$context $context)
+                    ]
+                (component state))))
+          (constantly nil))
+         (catch Exception e
+           nil))))))
+
 (defeffect ::inspect-result [result]
   (tap> result))
 
@@ -476,6 +513,10 @@
    (basic/checkbox {:checked? (:def row)})
    (basic/textarea {:text (:name row)})
    (case (:editor row)
+
+     :user-defined
+     (user-defined-editor {:src (:src row)
+                           :result result})
 
      :code-editor
      (code-editor/text-editor {:buf (:src row)})
@@ -593,7 +634,10 @@
                                                            [[::insert-spreadsheet-row $ss (:id row) :number-slider]])})
                                 (basic/button {:text "+[]"
                                                :on-click (fn []
-                                                           [[::insert-spreadsheet-row $ss (:id row) :canvas]])}))
+                                                           [[::insert-spreadsheet-row $ss (:id row) :canvas]])})
+                                (basic/button {:text "+!"
+                                               :on-click (fn []
+                                                           [[::insert-spreadsheet-row $ss (:id row) :user-defined]])}))
                              
                                ;;(ui/spacer srow-width 5)
                                (ui/rectangle srow-width 5)
@@ -776,6 +820,22 @@
                                                    :fills (->buf [{}]) 
                                                    :corner-radius (->buf 3)}}]}}))
 
+(defmethod parse-src :user-defined [row]
+  (let [src (:src row)
+        [err form] (try
+                     [nil {:component (read-string-memo (->str (:component-name src)))
+                           :initial-state (read-string-memo (->str (:initial-state-form src)))
+                           :data (list 'quote (::user-defined-state src))}]
+                     (catch Exception e
+                       [e nil]))]
+    (if err
+      (assoc row :err err)
+      (assoc row :form form))))
+
+(defmethod init-editor :user-defined [row]
+  (merge row
+         {}))
+
 (defn parse-row [row]
   (let [ ;; src (:src row)
         ;; row (assoc row :src (->str src))
@@ -887,6 +947,38 @@
   )
 
 
+(defn process-make-component [env row]
+  (let [form (:form row)]
+    (if-not (and (seq? form)
+                 (= (first form) 'make-component))
+      [env row]
+      (let [[_ args ret] form
+            ret-id (get-in env [:bindings ret])
+            arg-ids (into #{}
+                          (map (fn [sym]
+                                 (get-in env [:bindings sym])))
+                          (-> args first :keys))
+            bindings (loop [deps #{ret-id}
+                            rows (seq (reverse (:rows env)))
+                            bindings []]
+                       (if rows
+                         (let [row (first rows)]
+                           (if (contains? deps (:id row))
+                             (recur (-> deps
+                                        (disj (:id row))
+                                        (into (:deps row))
+                                        (clojure.set/difference arg-ids))
+                                    (next rows)
+                                    (conj bindings [(:sym row) (:form row)]))
+                             (recur deps (next rows) bindings)))
+                         (into [] cat (reverse bindings))))
+
+            form `(defui ~(symbol (:name row)) ~args
+                    (let ~bindings
+                      ~ret))]
+        [env (assoc row :form form)]))))
+
+
 (defn complete-env [proc]
   (fn [env row]
     [env (proc row)]))
@@ -967,6 +1059,7 @@
                               (wrap-result eval-fn e nil))))))
 
             result (re-eval form)]
+        ;; (prn "running " sym)
         result)))
   )
 
@@ -974,6 +1067,7 @@
   (let [[env ss] (process-spreadsheet ss
                                       [(complete-env parse-row)
                                        process-make-fn
+                                       process-make-component
                                        add-deps])]
     (loop [ss (seq ss)
            vals {}
