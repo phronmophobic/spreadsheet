@@ -251,37 +251,43 @@
       (dispatch! :set $kw-str ""))))
 
 (defn new-label [[mx my]]
-  #:element{:type :element/label
-            :id (genid)
-            ::properties
-            #:element{
-                      :x (->buf (long mx))
-                      :y (->buf (long my))
-                      :fills (->buf [{}])
-                      :font (->buf {:font/size 14})
-                      :text (->buf "hello")}})
+  (let [id (genid)]
+    #:element{:type :element/label
+              :id id
+              :name (str "label_" id)
+              ::properties
+              #:element{
+                        :x (->buf (long mx))
+                        :y (->buf (long my))
+                        :fills (->buf [{}])
+                        :font (->buf {:font/size 14})
+                        :text (->buf "hello")}}))
 
 (defn new-rect [[mx my]]
-  #:element{:type :element/shape
-            :id (genid)
-            ::properties
-            #:element{
-                      :x (->buf (long mx))
-                      :y (->buf (long my))
-                      :width (->buf 15)
-                      :height (->buf 20)
-                      :fills (->buf [{}]) 
-                      :corner-radius (->buf 3)}})
+  (let [id (genid)]
+    #:element{:type :element/shape
+              :id id
+              :name (str "rect_" id)
+              ::properties
+              #:element{
+                        :x (->buf (long mx))
+                        :y (->buf (long my))
+                        :width (->buf 15)
+                        :height (->buf 20)
+                        :fills (->buf [{}]) 
+                        :corner-radius (->buf 3)}}))
 
 
 (defn new-code [[mx my]]
-  #:element{:type :element/code
-            :id (genid)
-            ::properties
-            #:element{
-                      :x (->buf (long mx))
-                      :y (->buf (long my))
-                      :form (->buf '(ui/label ":)"))}})
+  (let [id (genid)]
+    #:element{:type :element/code
+              :id id
+              :name (str "code_" id)
+              ::properties
+              #:element{
+                        :x (->buf (long mx))
+                        :y (->buf (long my))
+                        :form (->buf '(ui/label ":)"))}}))
 
 (defui wrap-tool [{:keys [width height tool src body]}]
   (basic/scrollview
@@ -516,36 +522,16 @@
                                      :editor editor-type} )]
                       (drop-while #(not= row-id (:id %)) spreadsheet)]))))
 
-(defeffect ::add-spreadsheet-row [$spreadsheet]
-  (dispatch! :update $spreadsheet conj
-             {:name (name (gensym))
-              :id (gensym)
-              :editor :code-editor
-              :src (buffer/buffer "42" {:mode :insert})}))
-
-(defeffect ::add-spreadsheet-row-number-slider [$spreadsheet]
-  (dispatch! :update $spreadsheet conj
-             {:name (name (gensym))
-              :id (gensym)
-              :editor :number-slider
-              :src 12}))
 
 
-(defeffect ::add-spreadsheet-row-canvas [$spreadsheet]
+
+(defeffect ::add-spreadsheet-row [$spreadsheet editor-type]
   (dispatch! :update $spreadsheet conj
-             {:name (name (gensym))
-              :id (gensym)
-              :editor :canvas
-              :src {:elements [#:element{:type :element/shape
-                                         :id (genid)
-                                         ::properties
-                                         #:element{
-                                                   :x (->buf 5)
-                                                   :y (->buf 10)
-                                                   :width (->buf 15)
-                                                   :height (->buf 20)
-                                                   :fills (->buf [{}]) 
-                                                   :corner-radius (->buf 3)}}]}}))
+             (init-editor {:name (name (gensym))
+                           :id (gensym)
+                           :editor editor-type} )
+             ))
+
 
 (defui spreadsheet-editor [{:keys [ss results
 
@@ -560,16 +546,20 @@
          (conj intents [:set $shift-down? shift?])
          intents)))
    (vertical-layout
-    (basic/button {:text "+"
-                   :on-click (fn []
-                               [[::add-spreadsheet-row $ss]])})
+    (ui/horizontal-layout
+     (basic/button {:text "+"
+                    :on-click (fn []
+                                [[::add-spreadsheet-row $ss :code-editor]])})
 
-    (basic/button {:text "+42"
-                   :on-click (fn []
-                               [[::add-spreadsheet-row-number-slider $ss]])})
-    (basic/button {:text "+[]"
-                   :on-click (fn []
-                               [[::add-spreadsheet-row-canvas $ss]])})
+     (basic/button {:text "+42"
+                    :on-click (fn []
+                                [[::add-spreadsheet-row $ss :number-slider]])})
+     (basic/button {:text "+[]"
+                    :on-click (fn []
+                                [[::add-spreadsheet-row $ss :canvas]])})
+     (basic/button {:text "+!"
+                    :on-click (fn []
+                                [[::add-spreadsheet-row $ss :user-defined]])}))
     (basic/scrollview
      {:scroll-bounds [1200 800]
       :body
