@@ -789,9 +789,9 @@
       row
       (let [[err sym] (try
                         (let [sym (read-string (:name row))]
-                          (assert (and (symbol? sym)
-                                       (not (qualified-symbol? sym)))
-                                  (str "Names must be unqualified symbols: " sym))
+                          (when (not (and (symbol? sym)
+                                          (not (qualified-symbol? sym))))
+                            (throw (Exception.  (str "Names must be unqualified symbols: " sym)) ))
                           [nil sym])
                         (catch Exception e
                           [e nil]))]
