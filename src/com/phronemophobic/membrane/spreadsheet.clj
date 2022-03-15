@@ -1053,19 +1053,26 @@
   (-> @spreadsheet-state
       :ss))
 
-(defn save-ss []
-  (with-open [w (io/writer "ss.edn")]
-    (binding [*print-length* false
-              *out* w]
-      (pr (get-ss)))))
+(defn save-ss
+  ([]
+    (save-ss "ss.edn"))
+  ([fname]
+   (with-open [w (io/writer fname)]
+     (binding [*print-length* false
+               *out* w]
+       (pr (get-ss))))))
 
-(defn load-ss  []
-  (let [ss (with-open [rdr (io/reader "ss.edn")
-                       pbr (PushbackReader. rdr)]
-             (clojure.edn/read pbr))]
-    (swap! spreadsheet-state
-           (fn [m]
-             (-> m
-                 (assoc :ss ss)
-                 (dissoc :cache)))))
-  nil)
+(defn load-ss
+  ([]
+   (load-ss "ss.edn"))
+  ([fname]
+   (let [ss (with-open [rdr (io/reader fname)
+                        pbr (PushbackReader. rdr)]
+              (clojure.edn/read pbr))]
+     (swap! spreadsheet-state
+            (fn [m]
+              (-> m
+                  (assoc :ss ss)
+                  (dissoc :cache)))))
+   nil))
+
