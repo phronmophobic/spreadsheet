@@ -20,7 +20,8 @@
             [clojure.tools.analyzer.jvm :as ana.jvm]
             [membrane.components.code-editor.code-editor :as code-editor]
             [liq.buffer :as buffer])
-  (:import java.io.PushbackReader)
+  (:import java.io.PushbackReader
+           java.time.Instant)
   (:gen-class))
 
 (defmacro with-refs [ref-names & body]
@@ -64,6 +65,15 @@
 
 (defn wrap-result [re-eval error success]
   (->AResult re-eval error success))
+
+(defn wrap-result-constant [err success]
+  (let [v (atom nil)
+        result (wrap-result (fn [& args]
+                              @v)
+                            err
+                            success)]
+    (reset! v result)
+    result))
 
 (defonce last-id (atom 0))
 (defn genid []
@@ -501,6 +511,15 @@
          (catch Exception e
            nil))))))
 
+(defui side-effect-editor [{:keys [src side-effect-ts]}]
+  (ui/horizontal-layout
+   (basic/button {:text "go"
+                  :on-click (fn []
+                              [[:set $side-effect-ts (-> (Instant/now)
+                                                         (.toEpochMilli))]])})
+   (code-editor/text-editor {:buf (:buf src)})))
+
+
 (defeffect ::inspect-result [result]
   (tap> result))
 
@@ -517,6 +536,10 @@
      :user-defined
      (user-defined-editor {:src (:src row)
                            :result result})
+
+     :side-effect
+     (side-effect-editor {:src (:src row)
+                          :side-effect-ts (:side-effect-ts row)})
 
      :code-editor
      (code-editor/text-editor {:buf (:src row)})
@@ -583,6 +606,22 @@
              ))
 
 
+(defui button-bar [{:keys [ss row-id]}]
+  (apply
+   ui/horizontal-layout
+   (for [[text editor-type] [["+" :code-editor]
+                             ["+42" :number-slider]
+                             ["+[]" :canvas]
+                             ["+:)" :user-defined]
+                             ["+!!" :side-effect]]]
+     (basic/button {:text text
+                    :hover? (get extra [:hover? row-id editor-type])
+                    :on-click (fn []
+                                (if row-id
+                                  [[::insert-spreadsheet-row $ss row-id editor-type]]
+                                  [[::add-spreadsheet-row $ss editor-type]]))}))))
+
+
 (defui spreadsheet-editor [{:keys [ss results
 
                                    ]}]
@@ -596,20 +635,7 @@
          (conj intents [:set $shift-down? shift?])
          intents)))
    (vertical-layout
-    (ui/horizontal-layout
-     (basic/button {:text "+"
-                    :on-click (fn []
-                                [[::add-spreadsheet-row $ss :code-editor]])})
-
-     (basic/button {:text "+42"
-                    :on-click (fn []
-                                [[::add-spreadsheet-row $ss :number-slider]])})
-     (basic/button {:text "+[]"
-                    :on-click (fn []
-                                [[::add-spreadsheet-row $ss :canvas]])})
-     (basic/button {:text "+!"
-                    :on-click (fn []
-                                [[::add-spreadsheet-row $ss :user-defined]])}))
+    (button-bar {:ss ss})
     (basic/scrollview
      {:scroll-bounds [1200 800]
       :body
@@ -624,20 +650,8 @@
                      (basic/on-hover
                       {:hover? hover?
                        :body (if hover?
-                               (horizontal-layout
-                                (basic/button {:text "+"
-                                               :on-click (fn []
-                                                           [[::insert-spreadsheet-row  $ss (:id row) :code-editor]])})
-
-                                (basic/button {:text "+42"
-                                               :on-click (fn []
-                                                           [[::insert-spreadsheet-row $ss (:id row) :number-slider]])})
-                                (basic/button {:text "+[]"
-                                               :on-click (fn []
-                                                           [[::insert-spreadsheet-row $ss (:id row) :canvas]])})
-                                (basic/button {:text "+!"
-                                               :on-click (fn []
-                                                           [[::insert-spreadsheet-row $ss (:id row) :user-defined]])}))
+                               (button-bar {:ss ss
+                                            :row-id (:id row)})
                              
                                ;;(ui/spacer srow-width 5)
                                (ui/rectangle srow-width 5)
@@ -678,10 +692,16 @@
                                           (loop []
                                             (when-let [ss (async/<!! ss-chan)]
                                               (try
-                                                (let [cache (get @spreadsheet-state :cache {})
-                                                      [next-cache results] (calc-spreadsheet eval-ns cache ss)]
+                                                (let [state @spreadsheet-state
+                                                      cache (get state :cache {})
+                                                      side-effects (get state :side-effects {})
+
+                                                      {results :results
+                                                       next-cache :cache
+                                                       side-effects :side-effects} (calc-spreadsheet eval-ns cache side-effects ss)]
                                                   (swap! spreadsheet-state assoc
                                                          :results results
+                                                         :side-effects side-effects
                                                          :cache next-cache)
                                                   (#'backend/glfw-post-empty-event))
                                                 (catch Exception e
@@ -835,6 +855,20 @@
 (defmethod init-editor :user-defined [row]
   (merge row
          {}))
+
+
+(defmethod parse-src :side-effect [row]
+  (merge row
+         (parse-src {:editor :code-editor
+                     :src (-> row :src :buf)})
+         {:side-effect? true
+          :editor :side-effect}))
+
+(defmethod init-editor :side-effect [row]
+  (merge row
+         {:src {:buf (buffer/buffer "42" {:mode :insert})}
+          :side-effect? true}))
+
 
 (defn parse-row [row]
   (let [ ;; src (:src row)
@@ -1016,13 +1050,7 @@
 (defn calc-result [eval-ns row bindings]
   (let [{:keys [sym form err]} row]
     (if err
-      (let [v (atom nil)
-            result (wrap-result (fn [& args]
-                                  @v)
-                                err
-                                nil)]
-        (reset! v result)
-        result)
+      (wrap-result-constant err nil)
       ;; else
       (let [binding-code (into []
                                (mapcat
@@ -1063,7 +1091,7 @@
         result)))
   )
 
-(defn calc-spreadsheet [eval-ns cache ss]
+(defn calc-spreadsheet [eval-ns cache side-effects ss]
   (let [[env ss] (process-spreadsheet ss
                                       [(complete-env parse-row)
                                        process-make-fn
@@ -1072,19 +1100,50 @@
     (loop [ss (seq ss)
            vals {}
            bindings {}
-           next-cache {}]
+           next-cache {}
+           side-effects side-effects]
       (if-not ss
-        [next-cache vals]
+        {:cache next-cache
+         :results vals
+         :side-effects side-effects}
         (let [row (first ss)
               {:keys [sym form err]} row
               cache-key [sym form err bindings]
-              result (if-let [result (get cache cache-key)]
-                       result
-                       (calc-result eval-ns row bindings))]
+              [side-effect-result
+               result]
+              (if (:side-effect? row)
+                (if-let [ts (:side-effect-ts row)]
+                  (let [{result :result
+                         last-run-ts :side-effect-ts
+                         :as side-effect-result} (get side-effects (:id row))]
+                    (if (or (not last-run-ts)
+                            (not= last-run-ts ts))
+                      (let [result (calc-result eval-ns row bindings)]
+                        (prn "calculating side effect" (:name row))
+                        [{:result result
+                          :side-effect-ts ts}
+                         result])
+                      [side-effect-result
+                       result]))
+
+                  ;; no ts. return exception
+                  [nil
+                   (wrap-result-constant
+                    (Exception. "Side Effect not marked to run yet.")
+                    nil)])
+
+                ;; else not side effect
+                [nil
+                 (if-let [result (get cache cache-key)]
+                   result
+                   (calc-result eval-ns row bindings))])]
           (recur (next ss)
-                   (assoc vals (:id row) result)
-                   (assoc bindings sym result)
-                   (assoc next-cache cache-key result)))))))
+                 (assoc vals (:id row) result)
+                 (assoc bindings sym result)
+                 (assoc next-cache cache-key result)
+                 (if (:side-effect? row)
+                   (assoc side-effects (:id row) side-effect-result)
+                   side-effects)))))))
 
 (def pop-text
   "1 	New York[d] 	New York 	8,804,190 	8,175,133 	+7.69% 	300.5 sq mi 	778.3 km2 	29,298/sq mi 	11,312/km2 	40.66°N 73.93°W
