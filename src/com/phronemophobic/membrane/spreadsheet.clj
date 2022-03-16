@@ -12,7 +12,8 @@
              :refer [defui
                      defeffect]]
             [membrane.skia :as backend]
-            [com.phronemophobic.viscous :as iv]
+            [com.phronemophobic.viscous :as iv
+             :refer [inspect]]
             [com.phronemophobic.membrane.schematic2 :as s2]
             [com.rpl.specter :as spec]
             ;; [membrane.java2d :as backend]
