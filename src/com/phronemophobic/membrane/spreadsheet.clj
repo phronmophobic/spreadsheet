@@ -844,9 +844,12 @@
 (defmethod parse-src :user-defined [row]
   (let [src (:src row)
         [err form] (try
-                     [nil {:component (read-string-memo (->str (:component-name src)))
-                           :initial-state (read-string-memo (->str (:initial-state-form src)))
-                           :data (list 'quote (::user-defined-state src))}]
+                     [nil
+                      `(let [initial-state# ~(read-string-memo (->str (:initial-state-form src)))]
+                         {:component ~(read-string-memo (->str (:component-name src)))
+                          :initial-state initial-state#
+                          :data (or ~(list 'quote (::user-defined-state src))
+                                    initial-state#)})]
                      (catch Exception e
                        [e nil]))]
     (if err
