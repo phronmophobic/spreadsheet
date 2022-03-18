@@ -478,8 +478,7 @@
 (defui user-defined-editor [{:keys [src result]}]
   (let [component-name (get src :component-name (->buf ""))
         initial-state-form (get src :initial-state-form (->buf nil))
-        state (get src ::user-defined-state)
-        user-defined-extra (get state ::extra)]
+        state (get src ::user-defined-state)]
     (ui/vertical-layout
      (basic/button {:text "reset"
                     :on-click (fn []
@@ -494,8 +493,8 @@
           (let [component (:component result)
                 initial-state (:initial-state result)]
             (when (and component initial-state)
-              (let [
-                    state (or state initial-state)
+              (let [state (or state initial-state)
+                    user-defined-extra (get state ::extra)
                     state (into state
                                 (map (fn [k]
                                        [(keyword (str "$" (name k)))
