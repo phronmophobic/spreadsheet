@@ -842,18 +842,22 @@
 
 (defmethod parse-src :user-defined [row]
   (let [src (:src row)
+        user-defined-state-sym (gensym)
         [err form] (try
                      [nil
                       `(let [initial-state# ~(read-string-memo (->str (:initial-state-form src)))]
                          {:component ~(read-string-memo (->str (:component-name src)))
                           :initial-state initial-state#
-                          :data (or ~(list 'quote (::user-defined-state src))
+                          :data (or ~user-defined-state-sym
                                     initial-state#)})]
                      (catch Exception e
                        [e nil]))]
     (if err
       (assoc row :err err)
-      (assoc row :form form))))
+      (assoc row
+             :form form
+             :bindings
+             {user-defined-state-sym (iv/wrap (::user-defined-state src))}))))
 
 (defmethod init-editor :user-defined [row]
   (merge row
@@ -1139,7 +1143,8 @@
                 [nil
                  (if-let [result (get cache cache-key)]
                    result
-                   (calc-result eval-ns row bindings))])]
+                   (let [row-bindings (into bindings (:bindings row))]
+                     (calc-result eval-ns row row-bindings)))])]
           (recur (next ss)
                  (assoc vals (:id row) result)
                  (assoc bindings sym result)
