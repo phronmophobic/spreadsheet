@@ -791,18 +791,7 @@
           form)))
 (defmethod init-editor :canvas [row]
   (merge row
-         {:src {:elements [#:element{:type :element/shape
-                                         :id (genid)
-
-
-                                         ::properties
-                                         #:element{
-                                                   :x (->buf 5)
-                                                   :y (->buf 10)
-                                                   :width (->buf 15)
-                                                   :height (->buf 20)
-                                                   :fills (->buf [{}]) 
-                                                   :corner-radius (->buf 3)}}]}}))
+         {:src {:elements []}}))
 
 (defmethod parse-src :user-defined [row]
   (let [src (:src row)
