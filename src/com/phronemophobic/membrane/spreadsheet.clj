@@ -710,23 +710,8 @@
      nil)))
 
 (def my-spreadsheet
-  [{:name "s"
-    :id 1
-    :editor :code-editor
-    :src (buffer/buffer "(+ 1 2)" {:mode :insert})}
-   {:name "s"
-    :id 2
-    :editor :code-editor
-    :src (buffer/buffer "(+ s 2)" {:mode :insert})}
-   {:name "t"
-    :id 3
-    :editor :code-editor
-    :src (buffer/buffer "1234" {:mode :insert})}
-   {:name "u"
-    :id 4
-    :editor :code-editor
-    :src (buffer/buffer "(+ s t)" {:mode :insert})}
-   ])
+  [])
+
 (defn init-spreadsheet []
   (swap! spreadsheet-state
          assoc :ss my-spreadsheet)
@@ -738,14 +723,6 @@
 (defn run []
   (run-results *ns*)
   (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state)))
-
-
-
-
-
-
-
-
 
 (defmulti parse-src :editor)
 (defmethod parse-src :code-editor [row]
