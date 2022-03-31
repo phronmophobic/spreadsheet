@@ -16,6 +16,7 @@
              :refer [inspect]]
             [com.phronemophobic.membrane.schematic2 :as s2]
             [com.rpl.specter :as spec]
+            [clojure.zip :as z]
             ;; [membrane.java2d :as backend]
             ;; [membrane.skija :as backend]
             [clojure.tools.analyzer.jvm :as ana.jvm]
@@ -90,6 +91,54 @@
 
 (defn ->buf [x]
   (buffer/buffer (pr-str x) {:mode :insert}))
+
+(defn distance [[x1 y1] [x2 y2]]
+  (Math/sqrt
+   (+
+    (Math/pow (- x2 x1) 2)
+    (Math/pow (- y2 y1) 2))))
+
+(defui wrap-drag-and-drop [{:keys [^:membrane.component/contextual
+                                   drag
+                                   drag-start
+                                   drag-init
+                                   body]}]
+  (ui/on
+   (ui/wrap-on
+    :mouse-down
+    (fn [handler pos]
+      (let [intents (handler pos)]
+        (if-let [intent (some #(when (= (first %) :start-drag)
+                                 %)
+                              (reverse intents))]
+          (concat (remove #(= (first %) :start-drag)
+                          intents)
+                  [[:set $drag-start pos]
+                   [:set $drag-init (second intent)]])
+          intents)))
+    :mouse-move
+    (fn [handler pos]
+      (let [intents (handler pos)]
+        (if (and drag-start
+                 (> (distance drag-start pos) 10))
+          (concat intents
+                  [[:delete $drag-start]
+                   [:delete $drag-init]
+                   [:set $drag drag-init]])
+          ;; else
+          intents)))
+    :mouse-up
+    (fn [handler pos]
+      (if (or drag drag-start drag-init)
+        (let [intents (handler pos)]
+          (concat
+           intents
+           [[:set $drag nil]
+            [:delete $drag-start]
+            [:delete $drag-init]]))
+        (handler pos)))
+    body))
+  )
 
 (defui wrap-resizing [{:keys [resizing?
                               width
@@ -331,19 +380,101 @@
                  :new-element new-label}))}))
 
 
+(defn zfind [zip pred]
+  (loop [zip zip]
+    (if (z/end? zip)
+      nil
+      (if (pred (z/node zip))
+        zip
+        (recur (z/next zip))))))
+
+(defn element-zipper [elem]
+  (z/zipper (constantly true)
+            (fn [elem]
+              (if (vector? elem)
+                (seq elem)
+                (seq (:element/children elem))))
+            (fn [orig xs]
+              (if (vector? orig)
+                (vec xs)
+                (assoc orig :element/children (vec xs))))
+            elem))
+
+(defeffect ::move-element-to-beginning [$elements eid]
+  (dispatch!
+   :update $elements
+   (fn [elements]
+    (let [zip (element-zipper elements)
+          zelem (zfind zip #(= (:element/id %) eid))
+          elem (z/node zelem)
+          elements (-> zelem
+                       z/remove
+                       z/root)]
+      (into [elem] elements)))))
+
+(defeffect ::move-element-after [$elements eid target-id]
+  (when (not= eid target-id)
+    (dispatch!
+     :update $elements
+     (fn [elements]
+       (let [zip (element-zipper elements)
+             zelem (zfind zip #(= eid (:element/id %)))
+             elem (z/node zelem)
+             elements (-> zelem z/remove z/root)
+
+             zip (element-zipper elements)
+             ztarget (zfind zip #(= target-id (:element/id %)))
+             ztarget (z/insert-right ztarget elem)]
+         (z/root ztarget))))))
+
+(defeffect ::move-element-to-beginning-of [$elements eid target-id]
+  (dispatch!
+   :update $elements
+   (fn [elements]
+     (let [zip (element-zipper elements)
+           zelem (zfind zip #(= eid (:element/id %)))
+           elem (z/node zelem)
+           elements (-> zelem z/remove z/root)
+
+           zip (element-zipper elements)
+           ztarget (zfind zip #(= target-id (:element/id %)))
+           ztarget (z/insert-child ztarget elem)]
+       (z/root ztarget)))))
+
+;; need existing defitinion with meta-data
 (defui element-selector [{:keys [elements selection
                                  ^:membrane.component/contextual
                                  shift-down?
+                                 ^:membrane.component/contextual
+                                 drag
                                  ]}])
 (defui element-selector [{:keys [elements selection
                                  ^:membrane.component/contextual
                                  shift-down?
-                                 ]}]
+                                 ^:membrane.component/contextual
+                                 drag]}]
   (apply
    ui/vertical-layout
+   (when drag
+     (let [hover? (get extra [:hover :before])]
+       (ui/on
+        :mouse-up
+        (fn [_]
+          [[::move-element-to-beginning drag]
+           [:set $selection #{}]])
+        (basic/on-hover
+         {:hover? hover?
+          :$body nil
+          :body (ui/filled-rectangle [0 0 0 (if hover?
+                                              1
+                                              0.2)]
+                                     100 8)}))))
    (for [element elements]
      (let [lbl (ui/on
                 :mouse-down
+                (fn [_]
+                  [[:start-drag (:element/id element)]])
+                :mouse-up
                 (fn [_]
                   (if shift-down?
                     [[:update $selection conj (:element/id element)]]
@@ -351,26 +482,44 @@
                 (ui/label
                  (or (:element/name element)
                      (:element/id element))))]
-       (ui/horizontal-layout
-        (ui/on
-         :mouse-down
-         (fn [_]
-           [[:set $selection #{}]
-            [:delete $element]])
-         (ui/label "X" (assoc (ui/font "Menlo" 10)
-                              :weight :bold)))
-        
-        (ui/spacer 3 0)
-        (vertical-layout
-         (if (get selection (:element/id element))
-           (ui/with-color [1 0 0]
-             lbl)
-           lbl)
-         (let [children (:element/children element)]
-           (when children
-             (ui/translate 5 0
-                           (element-selector {:elements children
-                                              :selection selection})))))))))
+       (ui/vertical-layout
+        (ui/horizontal-layout
+         (ui/on
+          :mouse-down
+          (fn [_]
+            [[:set $selection #{}]
+             [:delete $element]])
+          (ui/label "X" (assoc (ui/font "Menlo" 10)
+                               :weight :bold)))
+         (ui/spacer 3 0)
+         (vertical-layout
+          (if (get selection (:element/id element))
+            (ui/with-color [1 0 0]
+              lbl)
+            lbl)
+          (let [children (:element/children element)]
+            (when children
+              (ui/translate
+               5 0
+               (ui/on
+                ::move-element-to-beginning
+                (fn [drag]
+                  [[::move-element-to-beginning-of drag (:element/id element)]])
+                (element-selector {:elements children
+                                   :selection selection})))))))
+        (when drag
+          (let [hover? (get extra [:hover :after (:element/id element)])]
+            (ui/on
+             :mouse-up
+             (fn [_]
+               [[::move-element-after drag (:element/id element)]])
+             (basic/on-hover
+              {:hover? hover?
+               :$body nil
+               :body (ui/filled-rectangle [0 0 0 (if hover?
+                                                   1
+                                                   0.2)]
+                                          100 8)}))))))))
   )
 
 (defn matches-id? [id]
@@ -379,8 +528,8 @@
 (def matches-id?-memo (memoize matches-id?))
 
 (defui canvas-editor [{:keys [src result  tool
-
-                              ]}]
+                              ^:membrane.component/contextual
+                              drag]}]
   
   (let [elements (:elements src)
         mouse-down (:mouse-down src)
@@ -415,9 +564,20 @@
                        [[:set $resizing? true]])}))
      
      (ui/horizontal-layout
-      
-      (element-selector {:elements elements
-                         :selection selection})
+
+      (ui/on
+       ::move-element-after
+       (fn [eid after-id]
+         [[::move-element-after $elements eid after-id]])
+       ::move-element-to-beginning
+       (fn [eid]
+         [[::move-element-to-beginning $elements eid]])
+       ::move-element-to-beginning-of
+       (fn [eid target-id]
+         [[::move-element-to-beginning-of $elements eid target-id]])
+
+       (element-selector {:elements elements
+                          :selection selection}))
       [(ui/with-style :membrane.ui/style-stroke
          (ui/rectangle canvas-width canvas-height))
        (when result
@@ -625,41 +785,45 @@
 (defui spreadsheet-editor [{:keys [ss results
 
                                    ]}]
-  (ui/wrap-on
-   :key-event
-   (fn [handler key scancode actions mods]
-     (let [intents (handler key scancode actions mods)
-           shift-down? (get context :shift-down?)
-           shift? (= 1 (bit-and mods 1))]
-       (if (not= shift? shift-down?)
-         (conj intents [:set $shift-down? shift?])
-         intents)))
-   (vertical-layout
-    (button-bar {:ss ss})
-    (basic/scrollview
-     {:scroll-bounds [1200 800]
-      :body
-      (vertical-layout
-       (apply vertical-layout
-              (for [row ss]
-                (let [srow (spreadsheet-row {:row row
-                                             :result (get results (:id row))})
-                      srow-width 23]
-                  (vertical-layout
-                   (let [hover? (get extra [$row :hover])]
-                     (basic/on-hover
-                      {:hover? hover?
-                       :body (if hover?
-                               (button-bar {:ss ss
-                                            :row-id (:id row)})
-                             
-                               ;;(ui/spacer srow-width 5)
-                               (ui/rectangle srow-width 5)
-                               )}))
-                   srow
-                   ))))
-       (ui/spacer 0 300))
-      }))))
+  (wrap-drag-and-drop
+   {:$body nil
+    :body
+    (ui/wrap-on
+     :key-event
+     (fn [handler key scancode actions mods]
+       (let [intents (handler key scancode actions mods)
+             shift-down? (get context :shift-down?)
+             shift? (= 1 (bit-and mods 1))]
+         (if (not= shift? shift-down?)
+           (conj intents [:set $shift-down? shift?])
+           intents)))
+     (vertical-layout
+      (button-bar {:ss ss})
+      (basic/scrollview
+       {:scroll-bounds [1200 800]
+        :$body nil
+        :body
+        (vertical-layout
+         (apply vertical-layout
+                (for [row ss]
+                  (let [srow (spreadsheet-row {:row row
+                                               :result (get results (:id row))})
+                        srow-width 23]
+                    (vertical-layout
+                     (let [hover? (get extra [$row :hover])]
+                       (basic/on-hover
+                        {:hover? hover?
+                         :$body nil
+                         :body (if hover?
+                                 (button-bar {:ss ss
+                                              :row-id (:id row)})
+                                 ;;(ui/spacer srow-width 5)
+                                 (ui/rectangle srow-width 5)
+                                 )}))
+                     srow
+                     ))))
+         (ui/spacer 0 300))
+        })))}))
 
 (defonce spreadsheet-state (atom {}))
 
