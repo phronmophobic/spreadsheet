@@ -1321,6 +1321,7 @@
   ([]
    (load-ss "ss.edn"))
   ([fname]
+   (reset! last-id (rand-int (- Integer/MAX_VALUE 1000)))
    (let [ss (with-open [rdr (io/reader fname)
                         pbr (PushbackReader. rdr)]
               (clojure.edn/read pbr))]
