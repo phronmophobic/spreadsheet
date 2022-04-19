@@ -26,6 +26,19 @@
            java.time.Instant)
   (:gen-class))
 
+(defn write-edn [w obj]
+  (binding [*print-length* nil
+            *print-level* nil
+            *print-dup* false
+            *print-meta* false
+            *print-readably* true
+
+            ;; namespaced maps not part of edn spec
+            *print-namespace-maps* false
+
+            *out* w]
+    (pr obj)))
+
 (defmacro with-refs [ref-names & body]
   `(let ~(into
           []
@@ -1298,12 +1311,11 @@
 
 (defn save-ss
   ([]
-    (save-ss "ss.edn"))
+   (save-ss "ss.edn"))
   ([fname]
    (with-open [w (io/writer fname)]
-     (binding [*print-length* false
-               *out* w]
-       (pr (get-ss))))))
+     (write-edn w (-> (get-ss)
+                      remove-ephemeral)))))
 
 (defn load-ss
   ([]
