@@ -638,7 +638,8 @@
 (defui user-defined-editor [{:keys [src result]}]
   (let [component-name (get src :component-name (->buf ""))
         initial-state-form (get src :initial-state-form (->buf nil))
-        state (get src ::user-defined-state)]
+        ephemeral (get src ::ephemeral)
+        state (get ephemeral ::user-defined-state)]
     (ui/vertical-layout
      (basic/button {:text "reset"
                     :on-click (fn []
@@ -974,7 +975,9 @@
       (assoc row
              :form form
              :bindings
-             {user-defined-state-sym (iv/wrap (::user-defined-state src))}))))
+             {user-defined-state-sym (iv/wrap (-> src
+                                                  ::ephemeral
+                                                  ::user-defined-state))}))))
 
 (defmethod init-editor :user-defined [row]
   (merge row
@@ -1287,6 +1290,11 @@
 (defn get-ss []
   (-> @spreadsheet-state
       :ss))
+
+(defn remove-ephemeral [ss]
+  (spec/setval [spec/ALL :src map? ::ephemeral]
+               spec/NONE
+               ss))
 
 (defn save-ss
   ([]
