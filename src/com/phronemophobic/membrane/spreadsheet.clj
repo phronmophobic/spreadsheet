@@ -90,9 +90,8 @@
     (reset! v result)
     result))
 
-(defonce last-id (atom 0))
 (defn genid []
-  (swap! last-id inc))
+  (random-uuid))
 
 (def read-string-memo (memoize read-string))
 (defmulti init-editor :editor)
@@ -765,7 +764,7 @@
                      cat
                      [(take-while #(not= row-id (:id %)) spreadsheet)
                       [(init-editor {:name (name (gensym))
-                                     :id (gensym)
+                                     :id (random-uuid)
                                      :editor editor-type} )]
                       (drop-while #(not= row-id (:id %)) spreadsheet)]))))
 
@@ -775,7 +774,7 @@
 (defeffect ::add-spreadsheet-row [$spreadsheet editor-type]
   (dispatch! :update $spreadsheet conj
              (init-editor {:name (name (gensym))
-                           :id (gensym)
+                           :id (random-uuid)
                            :editor editor-type} )
              ))
 
@@ -1317,18 +1316,33 @@
      (write-edn w (-> (get-ss)
                       remove-ephemeral)))))
 
+(defn fix-ids [ss]
+  (let [ss (spec/transform [spec/ALL (spec/must :id) #(not (uuid? %))]
+                           (fn [_] (random-uuid))
+                           ss)
+        ss (spec/transform [spec/ALL
+                            #(= :canvas (:editor %))
+                            :src
+                            :elements
+                            spec/ALL
+                            ELEMENT-TREE-WALKER
+                            (spec/must :element/id)
+                            #(not (uuid? %))]
+                           (fn [_] (random-uuid))
+                           ss)]
+    ss))
+
 (defn load-ss
   ([]
    (load-ss "ss.edn"))
   ([fname]
-   (reset! last-id (rand-int (- Integer/MAX_VALUE 1000)))
    (let [ss (with-open [rdr (io/reader fname)
                         pbr (PushbackReader. rdr)]
               (clojure.edn/read pbr))]
      (swap! spreadsheet-state
             (fn [m]
               (-> m
-                  (assoc :ss ss)
+                  (assoc :ss (fix-ids ss))
                   (dissoc :cache)))))
    nil))
 
