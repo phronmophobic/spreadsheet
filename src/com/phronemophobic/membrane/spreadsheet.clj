@@ -21,7 +21,12 @@
             ;; [membrane.skija :as backend]
             [clojure.tools.analyzer.jvm :as ana.jvm]
             [membrane.components.code-editor.code-editor :as code-editor]
-            [liq.buffer :as buffer])
+            [liq.buffer :as buffer]
+
+            xtdb.rocksdb
+            [xtdb.api :as xt]
+
+            )
   (:import java.io.PushbackReader
            java.time.Instant)
   (:gen-class))
@@ -38,6 +43,17 @@
 
             *out* w]
     (pr obj)))
+
+(defn ->edn [obj]
+  (binding [*print-length* nil
+            *print-level* nil
+            *print-dup* false
+            *print-meta* false
+            *print-readably* true
+
+            ;; namespaced maps not part of edn spec
+            *print-namespace-maps* false]
+    (pr-str obj)))
 
 (defmacro with-refs [ref-names & body]
   `(let ~(into
@@ -299,6 +315,7 @@
                        
                        group #:element{:type :element/group
                                        :id (genid)
+                                       :name "group_"
                                        :children group-elems
 
                                        ::properties
@@ -326,7 +343,7 @@
   (let [id (genid)]
     #:element{:type :element/label
               :id id
-              :name (str "label_" id)
+              :name "label"
               ::properties
               #:element{
                         :x (->buf (long mx))
@@ -339,7 +356,7 @@
   (let [id (genid)]
     #:element{:type :element/shape
               :id id
-              :name (str "rect_" id)
+              :name "rect"
               ::properties
               #:element{
                         :x (->buf (long mx))
@@ -354,7 +371,7 @@
   (let [id (genid)]
     #:element{:type :element/code
               :id id
-              :name (str "code_" id)
+              :name "code"
               ::properties
               #:element{
                         :x (->buf (long mx))
@@ -696,6 +713,21 @@
 (defeffect ::inspect-result [result]
   (tap> result))
 
+(defui row-menu [{:keys []}]
+  (let [hover? (get extra :hover?)]
+    (basic/on-hover
+     {:hover? hover?
+      :$body nil
+      :body
+      (if hover?
+        (ui/vertical-layout
+         (basic/button {:text "save"
+                        :on-click (constantly [[:save]])})
+         (basic/button {:text "cleanup"
+                        :on-click (constantly [[:cleanup]])}))
+        (ui/padding 2
+         (ui/filled-rectangle [0 0 0] 8 8)))})))
+
 (defui spreadsheet-row [{:keys [row result]}]
 
   (horizontal-layout
@@ -819,8 +851,14 @@
         (vertical-layout
          (apply vertical-layout
                 (for [row ss]
-                  (let [srow (spreadsheet-row {:row row
-                                               :result (get results (:id row))})
+                  (let [srow
+                        (ui/on
+                         :save (fn []
+                                 [[::save-to-db ss (:id row)]])
+                         :cleanup (fn []
+                                    [[::cleanup $ss (:id row)]])
+                         (spreadsheet-row {:row row
+                                           :result (get results (:id row))}))
                         srow-width 23]
                     (vertical-layout
                      (let [hover? (get extra [$row :hover])]
@@ -845,7 +883,9 @@
   ([]
    (run-results *ns*))
   ([eval-ns]
-   (let [[old _] (swap-vals! spreadsheet-state dissoc :ss-chan :result-thread)]
+   (run-results eval-ns spreadsheet-state))
+  ([eval-ns atm]
+   (let [[old _] (swap-vals! atm dissoc :ss-chan :result-thread)]
      (when-let [ss-chan (:ss-chan old)]
        (async/close! ss-chan)))
 
@@ -856,29 +896,29 @@
                                           (loop []
                                             (when-let [ss (async/<!! ss-chan)]
                                               (try
-                                                (let [state @spreadsheet-state
+                                                (let [state @atm
                                                       cache (get state :cache {})
                                                       side-effects (get state :side-effects {})
 
                                                       {results :results
                                                        next-cache :cache
                                                        side-effects :side-effects} (calc-spreadsheet eval-ns cache side-effects ss)]
-                                                  (swap! spreadsheet-state assoc
+                                                  (swap! atm assoc
                                                          :results results
                                                          :side-effects side-effects
                                                          :cache next-cache)
                                                   (#'backend/glfw-post-empty-event))
-                                                (catch Exception e
+                                                (catch Throwable e
                                                   (prn e)))
                                               (recur))))
                                         "Result-Thread")))]
-     (swap! spreadsheet-state
+     (swap! atm
             assoc
             :ss-chan ss-chan
             :result-thread result-thread)
      (.start result-thread)
 
-     (add-watch spreadsheet-state ::update-results
+     (add-watch atm ::update-results
                 (fn check-update-results [key ref old new]
                   (let [ss (:ss new)]
                     (when-not (= (:ss new)
@@ -891,7 +931,10 @@
 
 (defn init-spreadsheet []
   (swap! spreadsheet-state
-         assoc :ss my-spreadsheet)
+         assoc
+         :ss my-spreadsheet
+         :ns {:ns/id (random-uuid)
+              :ns/name (gensym)})
   nil)
 (init-spreadsheet)
 
@@ -1074,8 +1117,11 @@
     (let [;;_ (prn (:form row))
           free (free-variables (:form row))
           deps (into #{}
-                     (map (fn [sym]
-                            (get-in env [:bindings sym])))
+                     (comp (map (fn [sym]
+                                  (get-in env [:bindings sym])))
+                           ;; dep can be missing if referring to var outside
+                           ;; of spreadsheet
+                           (remove nil?))
                      free)
           env (assoc-in env [:bindings (:sym row)] (:id row))]
       [env (assoc row :deps deps)])))
@@ -1156,13 +1202,15 @@
   (fn [env row]
     [env (proc row)]))
 
+(def default-process-passes
+  [(complete-env parse-row)
+   process-make-fn
+   process-make-component
+   add-deps])
+
 (defn process-spreadsheet
   ([spreadsheet]
-   (process-spreadsheet spreadsheet
-                        [(complete-env parse-row)
-                         process-make-fn
-                         process-make-component
-                         add-deps]))
+   (process-spreadsheet spreadsheet default-process-passes))
   ([spreadsheet procs]
    (reduce
     (fn [[env rows] row]
@@ -1222,7 +1270,7 @@
                                                   result)
                                    result)
                                  result)))
-                            (catch Exception e
+                            (catch Throwable e
                               (wrap-result eval-fn e nil))))))
 
             result (re-eval form)]
@@ -1345,4 +1393,221 @@
                   (assoc :ss (fix-ids ss))
                   (dissoc :cache)))))
    nil))
+
+(defn get-result-thread []
+  (->>
+   (Thread/getAllStackTraces)
+   keys
+   (filter
+    (fn [thread]
+      (= "Result-Thread" (.getName thread))))
+   first))
+
+(defn stop-result-thread!! []
+  (.stop (get-result-thread)))
+
+(defn dump-all-threads [fname]
+  (with-open [w (io/writer fname)]
+    (write-edn (->> (Thread/getAllStackTraces)
+                    (map (fn [[thread trace]]
+                           [(bean thread)
+                            (map bean trace)]))))))
+
+
+(def editors-schema
+  [{:db/ident ::code-editor}
+   {:db/ident ::number-slider}
+   {:db/ident ::canvas}
+   {:db/ident ::user-defined}
+   {:db/ident ::side-effect}])
+
+(def schema [
+             ;; cells
+             {:db/ident :cell/id
+              :db/valueType :db.type/uuid
+              :db/cardinality :db.cardinality/one
+              :db/unique :db.unique/identity}
+             {:db/ident :cell/name
+              :db/doc "The cell's name"
+              :db/valueType :db.type/string
+              :db/cardinality :db.cardinality/one}
+             #_{:db/ident :cell/ns
+              :db/doc "The cell's ns"
+              :db/valueType :db.type/symbol
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :cell/editor
+              :db/doc "The cell's editor type"
+              :db/valueType :db.type/ref
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :cell.source/edn
+              :db/doc "Editor state stored as edn string"
+              :db/valueType :db.type/string
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :cell/def
+              :db/valueType :db.type/boolean
+              :db/cardinality :db.cardinality/one}
+
+             ;; array
+             {:db/ident :array/array
+              :db/valueType :db.type/ref
+              :db/cardinality :db.cardinality/many}
+             {:db/ident :array/object
+              :db/valueType :db.type/ref
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :array/idx
+              :db/valueType :db.type/long
+              :db/cardinality :db.cardinality/one}
+             
+
+             ;; namespaces
+             {:db/ident :ns/id
+              :db/valueType :db.type/uuid
+              :db/cardinality :db.cardinality/one
+              :db/unique :db.unique/identity}
+             {:db/ident :ns/name
+              :db/valueType :db.type/symbol
+              :db/cardinality :db.cardinality/one}
+             {:db/ident :ns/cells
+              :db/valueType :db.type/ref
+              :db/doc "Reference to an array of cells"
+              :db/cardinality :db.cardinality/one}
+
+
+             ]
+  )
+
+(def full-schema (->> (concat editors-schema
+                          schema)
+                      (map #(vector (:db/ident %) %))
+                      (into {})))
+(comment
+  (d/transact @conn
+               full-schema
+              )
+  ,)
+
+(def cfg {:store {:backend :file :path (.getAbsolutePath
+                                        (io/file "sstest"))}})
+
+
+
+(defn start-xtdb! []
+  (letfn [(kv-store [dir]
+            {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                        :db-dir (io/file dir)
+                        :sync? true}})]
+    (xt/start-node
+     {:xtdb/tx-log (kv-store "data/dev/tx-log")
+      :xtdb/document-store (kv-store "data/dev/doc-store")
+      :xtdb/index-store (kv-store "data/dev/index-store")})))
+
+#_(defonce xnode (start-xtdb!))
+(declare xnode)
+(defn stop-xtdb! []
+  (.close xnode))
+
+
+
+(defn ->transaction [{:keys [ss ns]}]
+  (let [db-cells
+        (->> ss
+             (spec/transform [spec/ALL]
+                             (fn [cell]
+                               {:cell/id (:id cell)
+                                ;; :db/
+                                :cell/name (:name cell)
+                                ;; :cell/ns (ns-name *ns*)
+                                :cell/def (boolean (:def cell))
+                                :cell/editor (keyword
+                                              (namespace ::my-ns)
+                                              (name (:editor cell)))
+                                :cell.source/edn (->edn (:src cell))})))
+        db-ns (assoc (select-keys ns [:ns/name :ns/id])
+                     :ns/cells
+                     {;; :db/id (d/tempid nil)
+                      :array/array
+                      (vec
+                       (map-indexed
+                        (fn [i cell]
+                          {:array/object {:cell/id (:cell/id cell)}
+                           :array/idx i
+                           ;; :db/id (d/tempid nil)
+                           })
+                        db-cells))})]
+    (concat db-cells
+            [db-ns])))
+
+(defn state->transaction [state]
+  (let [ss (:ss state)
+        ns (:ns state)
+        transaction (->transaction
+                     {:ss (-> ss
+                              remove-ephemeral)
+                      :ns ns})]
+    transaction))
+
+#_(defn save-ss-db
+  ([]
+   (let [conn @conn]
+     (save-ss-db conn)))
+  ([conn]
+   (d/transact conn (state->transaction @spreadsheet-state))
+
+   nil))
+
+
+#_(defn load-ss-db
+  ([]
+   (let [conn @conn]
+     (load-ss-db conn)))
+  ([conn]
+   (let [])))
+
+#_(defeffect ::save-to-db [ss row-id]
+  (let [[env ss] (process-spreadsheet
+                  ss
+                  (remove #{process-make-fn} default-process-passes))
+
+        row (some #(when (= row-id (:id %))
+                     %)
+                  ss)
+        form (:form row)
+        _ (assert (and (seq? form)
+                       (= (first form) 'make-fn)))
+        [_ args ret] form
+        ret-id (get-in env [:bindings ret])
+        arg-ids (into #{}
+                      (map (fn [sym]
+                             (get-in env [:bindings sym])))
+                      args)
+        dep-ids (loop [deps (into #{ret-id} arg-ids)
+                       rows (seq (reverse (:rows env)))]
+                  (if rows
+                    (let [row (first rows)]
+                      (if (contains? deps (:id row))
+                        (recur (into deps (:deps row))
+                               (next rows))
+                        (recur deps (next rows))))
+                    deps))
+        ]
+    (d/transact @conn (->> ss
+                           (filter #(dep-ids (:id %)))
+                           remove-ephemeral
+                           ss->db-form))))
+
+
+
+
+
+(defn db-cell->cell
+  [db-cell]
+  (let [normalized-cell
+       {:id (:cell/id db-cell),
+        :name (:cell/name db-cell),
+        :src (clojure.edn/read-string (:cell.source/edn db-cell)),
+        :editor (-> db-cell :cell/editor :db/ident name keyword)
+        :def (:cell/def db-cell)}]
+      normalized-cell))
+
+
 

@@ -3,7 +3,10 @@
         com.phronemophobic/membrane {:local/root "../membrane2"}
         com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.9.31.0-beta"}
 
-        com.phronemophobic/dev-db {:local/root "../dev-db"}
+        ;; com.phronemophobic/dev-db {:local/root "../dev-db"}
+        com.xtdb/xtdb-core {:mvn/version "1.21.0"}
+        com.xtdb/xtdb-rocksdb {:mvn/version "1.21.0"}
+
         com.phronemophobic.membrane/viscous {:local/root "../viscous"}
 
 
