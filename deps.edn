@@ -34,6 +34,7 @@
                          com.phronemophobic/clj-reddit {:local/root "../clj-reddit"}}
             :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
                        "-Djdk.attach.allowAttachSelf=true"
+                       "-XX:-OmitStackTraceInFastThrow"
                        "-XX:+DebugNonSafepoints"
                        "-Xmx8096M"]}
 
