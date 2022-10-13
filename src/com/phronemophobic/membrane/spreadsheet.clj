@@ -4,7 +4,7 @@
                      horizontal-layout]]
             [clojure.core.async :as async]
             [clojure.java.io :as io]
-            clojure.edn
+            [clojure.edn :as edn]
             clojure.set
             [membrane.basic-components :as basic]
             [clojure.data.json :as json]

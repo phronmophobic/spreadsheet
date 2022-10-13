@@ -19,6 +19,7 @@
 
             [com.phronemophobic.membrane.spreadsheet :as ss])
   (:import java.util.UUID
+           java.util.concurrent.Executors
            java.time.Instant))
 
 (defonce log (atom []))
@@ -45,6 +46,39 @@
 {:textbox {:ui {:component  #'basic/textarea
                 :init {:text "hello"}}
            :ports [:text-in :text]}}
+
+
+(defn ->graph
+  "Produces a graph from @app-state"
+  [{:keys [machines connections]}]
+  (let [machine-edges
+        (into #{}
+              (mapcat (fn [[[from-id from-port :as from]
+                            [to-id to-port :as to]]]
+                        [[from-id from]
+                         [to to-id]]))
+              connections)
+
+        ]
+    (apply uber/digraph
+           (concat machine-edges
+                   connections
+                   (keys machines))))
+  )
+
+(defn run-flow [{:keys [machines connections dispatch!] :as state}]
+  (let [g (->graph state)
+        sorted (alg/topsort g)
+        machine-ids (->> sorted
+                         (filter uuid?))]
+    (doseq [mid machine-ids]
+      (let [$machine `[(~'get :machines) (~'get ~mid)]]
+        (dispatch! ::run-machine $machine))
+      (doseq [{port-node :dest} (uber/out-edges g mid)
+              {:keys [src dest]} (uber/out-edges g port-node)
+              :let [conn [src dest]]]
+        (dispatch! ::activate-connection conn)))))
+
 
 (defui port-view [{:keys [port]}]
   (let [pid (::id port)]
@@ -266,6 +300,7 @@
             [:put-port :text text]]
            (handler s))))
      (basic/textarea {:text text
+                      :$text $text
                       :focus focus}))))
 
 (defeffect ::load-ports [machine port-refs]
@@ -283,19 +318,70 @@
     ;;(prn val)
     ))
 
-(defui print-machine-view [{:keys [obj machine]}]
-  (let [width (get extra :width 20)
-        height (get extra :height 1)
-        inspector-extra (get extra [:inspector (::id machine)])]
-   (ui/vertical-layout
-    (ui/on
-     :mouse-down
-     (fn [_]
-       [[::print-ingest $obj (::id machine) :obj]])
-     (basic/button {:text "ingest"}))
-    (iv/inspector {:obj obj
-                   :width width
-                   :height height}))))
+(defui print-machine-view [{:keys [machine]}]
+  (let [state (:state machine)
+        obj (get state :obj (iv/wrap nil))]
+    (let [width (get extra :width 20)
+          height (get extra :height 1)
+          inspector-extra (get extra [:inspector (::id machine)])]
+      (ui/vertical-layout
+       (ui/on
+        :mouse-down
+        (fn [_]
+          [[::print-ingest $obj (::id machine) :obj]])
+        (basic/button {:text "ingest"}))
+       (iv/inspector {:obj obj
+                      :width width
+                      :height height})))))
+
+
+(defui inc-machine [{:keys [machine]}]
+  (ui/label (-> machine :state :num)))
+
+(defn new-inc-machine! []
+  {::x 250
+   ::y 250
+   ::id (java.util.UUID/randomUUID)
+   ::ui {::initial-state {:num 42
+                          :out nil}
+         ::component inc-machine}
+   ::ports {:num {::id :num}
+            :out {::id :out}}
+   
+
+   ::name (rand-name)
+
+   :in-ports #{:num}
+   :out-ports #{:out}
+   :state {}
+   :f (fn [{{:keys [num]} :inbox
+
+            :as state}]
+        (println "going up" num)
+        (assoc state
+               :outbox {:out (inc num)}
+               :inbox {}
+               :num (inc num)))
+   })
+
+
+(defn new-buf-machine! []
+  {::id (java.util.UUID/randomUUID)
+   ::ui {::initial-state {:num 42
+                          :out nil}
+         ::component inc-machine}
+   ::ports {:num {::id :num}
+            :out {::id :out}}
+   
+
+   ::name (rand-name)
+
+   :in-ports #{:num}
+   :out-ports #{:out}
+   :state {}
+   :f (fn [{:keys [in] :as state}]
+        {:out (inc num)})
+   })
 
 (defn new-text-machine! []
   {::x 250
@@ -310,15 +396,22 @@
   {::x 500
    ::y 250
    ::id (java.util.UUID/randomUUID)
-   ::ui {::initial-state {:obj (iv/wrap
-                                '{::x 40
-                                  ::y 40
-                                  ::id (java.util.UUID/randomUUID)
-                                  ::ui {::initial-state {:obj (iv/wrap )}
-                                        ::component print-machine-view}
-                                  ::ports {:obj {::id :obj}}
-                                  ::name (rand-name)})}
+   ::ui {::initial-state {:state
+                          {:obj (iv/wrap
+                                 '{::x 40
+                                   ::y 40
+                                   ::id (java.util.UUID/randomUUID)
+                                   ::ui {::initial-state {:obj (iv/wrap )}
+                                         ::component print-machine-view}
+                                   ::ports {:obj {::id :obj}}
+                                   ::name (rand-name)})}}
          ::component print-machine-view}
+   :in-ports #{:obj}
+   :f (fn [{{:keys [obj]} :inbox
+            :as state}]
+        (assoc state
+               :inbox {}
+               :obj (iv/wrap obj)))
    ::ports {:obj {::id :obj}}
    ::name (rand-name)})
 
@@ -393,8 +486,9 @@
   (let [x (get machine ::x 0)
         y (get machine ::y 0)
         machine-ui (::ui machine)
-        machine-ui-state (get extra ::machine-ui-state
-                              (::initial-state machine-ui))
+        machine-ui-state machine
+        #_(get extra ::machine-ui-state
+               (::initial-state machine-ui))
         machine-ui-component (::component machine-ui)]
     (with-meta
       (ui/on
@@ -444,11 +538,21 @@
                                     [5 10]
                                     [10 5])
                            (ui/path [5 0]
-                                    [5 10])])))
+                                    [5 10])]))
+                       (ui/on
+                        :mouse-down
+                        (fn [_]
+                          [[::run-machine $machine]])
+                        (ui/with-style :membrane.ui/style-stroke
+                          [(ui/path [5 0]
+                                    [10 5]
+                                    [5 10])
+                           (ui/path [0 5]
+                                    [10 5])])))
                       (ui/label (::name machine))
                       (apply
                        ui/vertical-layout
-                       (for-kv [[_k port] (::ports machine)]
+                       (for [[_k port] (::ports machine)]
                          (port-view {:port port})))
                       (when machine-ui-component
                         (let [machine-extra (get extra ::machine-extra)]
@@ -483,12 +587,25 @@
                                machines))))
 
 
-(defeffect ::activate-connection [conn]
+(defn port-path [machine-id port-name]
+  (spec/keypath machine-id ::ports port-name ::value))
+
+(defeffect ::activate-connection* [$machines conn]
   (let [[[from-mid from-pid]
          [to-mid to-pid]] conn
-        val (dispatch! :take-port from-mid from-pid)]
-    (when val
-      (dispatch! :put-port to-mid to-pid val))))
+        from-path (port-path from-mid from-pid)
+        to-path (port-path to-mid to-pid)]
+    (dispatch! :update $machines
+               (fn [machines]
+                 (if (spec/select-one to-path machines)
+                   ;; already full
+                   machines
+                   (if-let [val (spec/select-one from-path machines)]
+                     (->> machines
+                          (spec/setval from-path spec/NONE)
+                          (spec/setval to-path val))
+                     machines))))))
+
 
 (defeffect :put-port* [$machines machine-id port-name val]
   (dispatch! :update $machines
@@ -513,9 +630,12 @@
 
 (defeffect ::add-machine [$machines machine [ox oy]]
   (dispatch! :update $machines
-             assoc (::id machine) (assoc machine
-                                         ::x (+ ox 300)
-                                         ::y (+ oy 300))))
+             assoc (::id machine)
+             (merge
+              (assoc machine
+                     ::x (+ ox 300)
+                     ::y (+ oy 300))
+              (-> machine ::ui ::initial-state))))
 
 (defui gview [{:keys [machines machine-registry selection temp-port connections]}]
   (let [offset (get extra :offset [0 0])]
@@ -556,8 +676,8 @@
            (fn [mid]
              [[:update $selection conj mid]])
            (vec
-            (for-kv [[_id machine] machines]
-              (machine-container {:machine machine}))))))})
+            (for [id (keys machines)]
+              (machine-container {:machine (get machines id)}))))))})
      (apply
       ui/vertical-layout
       (ui/label (pr-str selection))
@@ -569,24 +689,134 @@
                        (fn []
                          [[::add-machine $machines ((:new machine-meta)) offset]])})))]))
 
+
+
+
 (defonce app-state (atom {}))
+
+(defonce run-flow-chan nil)
+(defonce run-flow-thread nil)
+(defn stop-flow! []
+  (when run-flow-chan
+    (async/close! run-flow-chan)))
+(defn start-flow! []
+  (stop-flow!)
+  (alter-var-root #'run-flow-chan
+                  (fn [_]
+                    (async/chan (async/dropping-buffer 1))))
+  (alter-var-root #'run-flow-thread
+                  (fn [_]
+                    (prn "hi")
+                    (async/thread
+                      (try
+                        (prn "Start")
+                        (loop [to nil]
+                          (let [[val port]
+                                (async/alts!! (if to
+                                                [to run-flow-chan]
+                                                [run-flow-chan]))]
+                            (cond
+
+                              (or (= port to)
+                                  (and (= port run-flow-chan)
+                                       val))
+                              (do
+                                (prn "running flow")
+                                (run-flow @app-state)
+                                (recur (async/timeout 500)))
+
+                              ;; channel closed
+                              (and (= port run-flow-chan)
+                                   (nil? val))
+                              nil
+
+                              :else
+                              (do
+                                (prn "prn stopping flow")
+                                (recur nil)))))
+                        (catch Exception e
+                          (prn e))
+                        (finally
+                          (prn "quitting flow runner")))))
+                  )
+  (async/put! run-flow-chan true))
+
 
 (defn init-state!
   ([]
    (init-state! app-state))
   ([atm]
-   (reset! atm
-           {:machines {}
-            ::com/context {:xtdb @ss/xnode}
-            :machine-registry {::text {:new new-text-machine!
-                                       :name "text"}
-                               ::print {:new new-print-machine!
-                                        :name "print"}
-                               ::spreadsheet {:new new-spreadsheet-machine!
-                                              :name "spreadsheet"}
-                               }
-            :connections #{}
-            :selection #{}}))) 
+   (let [flow-executor (Executors/newSingleThreadExecutor)
+         $flow-future (list 'get ::flow-future)
+
+         $machines (list 'get :machines)
+         dispatch!
+         (fn dispatch!
+           ([effects]
+            (try
+              (if (keyword? effects)
+                ;; add backwords compatibility for 0 arg intent
+                (com/dispatch!* app-state dispatch! effects)
+                (run! #(apply dispatch! %) effects))
+              (catch Exception e
+                (prn "bad effects: " effects))))
+           ([effect-type & args]
+            (case effect-type
+              :take-port
+              (let [[machine-id port-name] args]
+                (dispatch! :take-port*
+                           $machines
+                           machine-id
+                           port-name))
+
+              :add-watch
+              (let [[key fn] args]
+                (add-watch app-state key fn))
+
+              :put-port
+              (let [[machine-id port-name val] args]
+                (dispatch! :put-port*
+                           $machines
+                           machine-id
+                           port-name
+                           val))
+
+              ::activate-connection
+              (let [conn (first args)]
+                (dispatch! ::activate-connection*
+                           $machines
+                           conn))
+
+              ::start-flow
+              (fn []
+                (dispatch! :update
+                           $flow-future
+                           (fn [future]
+                             (if future
+                               future
+                               )))
+                )
+
+              ;; else
+              (apply com/dispatch!* app-state dispatch! effect-type args))))
+
+         ]
+     (reset! atm
+             {:machines {}
+              :dispatch! dispatch!
+              ::flow-executor flow-executor
+              ::com/context {:xtdb @ss/xnode}
+              :machine-registry {::text {:new new-text-machine!
+                                         :name "text"}
+                                 ::print {:new new-print-machine!
+                                          :name "print"}
+                                 ::inc {:new new-inc-machine!
+                                        :name "inc"}
+                                 ::spreadsheet {:new new-spreadsheet-machine!
+                                                :name "spreadsheet"}
+                                 }
+              :connections #{}
+              :selection #{}})))) 
 
 (defonce init-state!' (init-state! app-state))
 
@@ -609,34 +839,7 @@
 
 
 (defn show! []
-  (let [
-        $machines (list 'get :machines)
-        handler
-        (fn dispatch!
-          ([& args]
-           (case (first args)
-             :take-port
-             (let [[machine-id port-name] (next args)]
-               (dispatch! :take-port*
-                          $machines
-                          machine-id
-                          port-name))
-
-             :add-watch
-             (let [[key fn] (next args)]
-               (add-watch app-state key fn))
-             
-             :put-port
-             (let [[machine-id port-name val] (next args)]
-               (dispatch! :put-port*
-                          $machines
-                          machine-id
-                          port-name
-                          val))
-
-             ;; else
-             (apply com/dispatch!* app-state dispatch! args))))]
-    (backend/run (com/make-app #'gview app-state handler)))
+  (backend/run (com/make-app #'gview app-state (:dispatch! @app-state)))
   )
 
 (comment
@@ -677,8 +880,8 @@
 (uber/edges g)
 
 (defn show-graph [g]
-  (uber/viz-graph g {:save {:filename "graph.png" :format :png}})
-  (backend/run (constantly (ui/image "graph.png")))
+  (uber/viz-graph g {:save {:filename "graph3.png" :format :png}})
+  (backend/run (constantly (ui/image "graph3.png")))
   )
 
 (comment
@@ -801,56 +1004,112 @@
 
 
 
-(def myg (uber/digraph [[:email-data :out] [:search-bar :data]]
-                           [[:search-bar :data] :search-bar]
-	                   [:search-bar [:search-bar :selected]]
-                           [[:search-bar :selected] [:transfer :in]]))
+(defeffect ::machine-pre [$machine]
+  (let [machine (dispatch! :get $machine)
+        id (::id machine)
+        in-ports (:in-ports machine)
+        inbox (get machine :inbox)
+        inbox (reduce (fn [inbox port]
+                      (if (get inbox port)
+                        inbox
+                        (if-let [v (dispatch! :take-port id port)]
+                          (assoc inbox port v)
+                          inbox)))
+                    inbox
+                    in-ports)]
+    (dispatch! :update $machine #(assoc % :inbox inbox))))
 
-(alg/topsort )
+(defeffect ::machine-visit [$machine]
+  (let [machine (dispatch! :get $machine)
+        {:keys [f in-ports out-ports]} machine
+        inbox (get machine :inbox)
+        outbox (get machine :outbox)]
+    (when (and (every? #(get inbox %) in-ports)
+               (every? #(not (get outbox %)) out-ports))
+      (dispatch! :update $machine f))))
 
-(defprotocol IFlowNode
-  :extend-via-metadata true
-  (run-node [node g]))
+(defeffect ::machine-post [$machine]
+  (let [machine (dispatch! :get $machine)
+        {:keys [out-ports]} machine
+        id (::id machine)
+        outbox (:outbox machine)
+        outbox (reduce
+                (fn [outbox [k v]]
+                  (prn id k v)
+                  (if (dispatch! :put-port id k v)
+                    (dissoc outbox k)
+                    outbox))
+                outbox
+                outbox)]
+    (dispatch! :set [$machine :outbox] outbox)))
 
-(defprotocol IFlowEdge
-  :extend-via-metadata true
-  (run-edge [edge g]))
+(defeffect ::run-machine [$machine]
+  (when (:f (dispatch! :get $machine))
+    (dispatch! ::machine-pre $machine)
+    (dispatch! ::machine-visit $machine)
+    (dispatch! ::machine-post $machine)))
+
+(defmulti test-dispatch!
+  (fn [type & args]
+    type))
 
 
-(uber/out-edges myg [:email-data :out])
+(def test-state (atom {:ports {:foo 42}
+                       :machines {:my-machine {:in-ports [:in]
+                                               :out-ports #{:out}
+                                               ::id :my-machine
+                                               :state {}
+                                               :f (fn [{:keys [in]}]
+                                                    (println "going up" in)
+                                                    {:out (inc in)})}}}))
 
-(defn run-graph [g]
-  (let [nodes (alg/topsort g)]
+(defmethod test-dispatch! :take-port [_ machine-id port]
+  (let [[old new] (swap-vals! test-state update-in [:ports machine-id] dissoc port)]
+    (get-in old [:ports machine-id port])))
 
-    (reduce (fn [g node]
-              (let [g (run-node node g)]
-                (reduce (fn [g edge]
-                          (run-edge edge g))
-                        g
-                        (uber/out-edges g node))))
-            g
-            nodes)))
+(defmethod test-dispatch! :put-port [_ machine-id port val]
+  (let [[old new] (swap-vals! test-state update-in [:ports machine-id port]
+                             (fn [old-val]
+                               (if old-val
+                                 old-val
+                                 val)))]
+    (nil? (get-in old [:ports machine-id port])) ))
+
+(defmethod test-dispatch! :set [_ & args]
+  (apply com/default-set test-state args))
+
+(defmethod test-dispatch! :update [_ & args]
+  (apply com/default-update test-state args))
+
+(defmethod test-dispatch! :get [_ & args]
+  (apply com/default-get test-state args))
+
+(defmethod test-dispatch! :delete [_ & args]
+  (apply com/default-delete test-state args))
+
+(defmethod test-dispatch! ::run-machine [_ $machine]
+  (effect-run-machine test-dispatch! $machine))
+
+(defmethod test-dispatch! ::machine-pre [_ $machine]
+  (effect-machine-pre test-dispatch! $machine))
+
+(defmethod test-dispatch! ::machine-visit [_ $machine]
+  (effect-machine-visit test-dispatch! $machine))
+
+(defmethod test-dispatch! ::machine-post [_ $machine]
+  (effect-machine-post test-dispatch! $machine))
 
 
-#_(def myg (uber/digraph [:text [:text :out]]
-                       [[:text :out] [:print :in]]
-                       [[:print :in] :print]))
 
-(defn transform-machine-run [ports]
-  (when (ready? :out)
-   (when-let [v (take-port :in)]
-     (put-port :out))))
+(comment
+  (test-dispatch! :put-port :my-machine :in 42)
+  (test-dispatch! ::run-machine [:machines :my-machine])
+  (test-dispatch! :take-port :my-machine :out )
 
-(defn attach-transform [chans]
-  
-  (go
-    (loop []
-      (let [vals (loop [chans (seq chans)
-                        vals []]
-                   (if chans
-                     (recur (next chans)
-                            (conj vals (<! (first chans))))
-                     vals))]
-        (>! out (apply f vals)))
-      (recur)))
-  )
+  (test-dispatch! :take-port :my-machine :in)
+  ,)
+
+
+
+
+
