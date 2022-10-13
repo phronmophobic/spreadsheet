@@ -12,13 +12,12 @@
              :refer [defui
                      defeffect]]
             [membrane.skia :as backend]
+            ;; [membrane.java2d :as backend]
             [com.phronemophobic.viscous :as iv
              :refer [inspect]]
             [com.phronemophobic.membrane.schematic2 :as s2]
             [com.rpl.specter :as spec]
             [clojure.zip :as z]
-            ;; [membrane.java2d :as backend]
-            ;; [membrane.skija :as backend]
             [clojure.tools.analyzer.jvm :as ana.jvm]
             [membrane.components.code-editor.code-editor :as code-editor]
             [liq.buffer :as buffer]
@@ -26,8 +25,10 @@
             xtdb.rocksdb
             [xtdb.api :as xt]
 
+
             )
   (:import java.io.PushbackReader
+           java.util.UUID
            java.time.Instant)
   (:gen-class))
 
@@ -106,8 +107,8 @@
     (reset! v result)
     result))
 
-(defn genid []
-  (random-uuid))
+(defn genid
+  ^java.util.UUID [] (java.util.UUID/randomUUID))
 
 (def read-string-memo (memoize read-string))
 (defmulti init-editor :editor)
@@ -653,7 +654,7 @@
                                            (when (seq kw-str)
                                              [[::add-property $properties $kw-str kw-str]]))})
                 (basic/textarea {:text kw-str}))
-               (for-kv [[k v] properties]
+               (for [[k v] properties]
                  (ui/horizontal-layout
                   (ui/on
                    :mouse-down
@@ -796,7 +797,7 @@
                      cat
                      [(take-while #(not= row-id (:id %)) spreadsheet)
                       [(init-editor {:name (name (gensym))
-                                     :id (random-uuid)
+                                     :id (genid)
                                      :editor editor-type} )]
                       (drop-while #(not= row-id (:id %)) spreadsheet)]))))
 
@@ -806,7 +807,7 @@
 (defeffect ::add-spreadsheet-row [$spreadsheet editor-type]
   (dispatch! :update $spreadsheet conj
              (init-editor {:name (name (gensym))
-                           :id (random-uuid)
+                           :id (genid)
                            :editor editor-type} )
              ))
 
@@ -828,8 +829,9 @@
 
 
 (defui spreadsheet-editor [{:keys [ss results
-
-                                   ]}]
+                                   xtdb
+                                   load-options
+                                   ns-info]}]
   (wrap-drag-and-drop
    {:$body nil
     :body
@@ -844,47 +846,110 @@
            intents)))
      (vertical-layout
       (button-bar {:ss ss})
+      #_(basic/button {:text "print-forms"
+                       :on-click
+                       (fn []
+                         [[::print-ss-forms ss]])}
+                      )
+      (let [edit-ns? (get extra :edit-ns?)
+            temp-ns-name (get extra :temp-ns-name)]
+        (cond
+
+          edit-ns?
+          (ui/vertical-layout
+           (basic/button {:text "save"
+                          :on-click
+                          (fn []
+                            [[:set $edit-ns? false]
+                             [:update $ns-info
+                              assoc :name (symbol temp-ns-name)]])})
+           (basic/textarea {:text temp-ns-name}))
+
+          load-options
+          (apply
+           ui/vertical-layout
+           
+           (basic/button {:text "cancel"
+                          :on-click
+                          (fn []
+                            [[:set $load-options nil]])})
+           (for [option load-options]
+             (basic/button {:text option
+                            :on-click
+                            (fn []
+                              [[::load-from-db xtdb $ns-info $ss option]
+                               [:set $load-options nil]])})))
+          
+          :else
+          (apply
+           ui/horizontal-layout
+           (interpose
+            (ui/spacer 8)
+            [(basic/button {:text "edit"
+                            :on-click
+                            (fn []
+                              [[:set $edit-ns? true]
+                               [:set $temp-ns-name (name (:name ns-info))]])})
+             (basic/button {:text "save"
+                            :on-click
+                            (fn []
+                              [[::save-to-db xtdb ns-info ss]])})
+             (basic/button {:text "load"
+                            :on-click
+                            (fn []
+                              [[::show-load-options $load-options xtdb]])})
+             
+             (ui/label (:name ns-info))])
+           
+           
+           )))
       (basic/scrollview
        {:scroll-bounds [1200 800]
         :$body nil
-        :body
-        (vertical-layout
-         (apply vertical-layout
-                (for [row ss]
-                  (let [srow
-                        (ui/on
-                         :save (fn []
-                                 [[::save-to-db ss (:id row)]])
-                         :cleanup (fn []
-                                    [[::cleanup $ss (:id row)]])
-                         (spreadsheet-row {:row row
-                                           :result (get results (:id row))}))
-                        srow-width 23]
-                    (vertical-layout
-                     (let [hover? (get extra [$row :hover])]
-                       (basic/on-hover
-                        {:hover? hover?
-                         :$body nil
-                         :body (if hover?
-                                 (button-bar {:ss ss
-                                              :row-id (:id row)})
-                                 ;;(ui/spacer srow-width 5)
-                                 (ui/rectangle srow-width 5)
-                                 )}))
-                     srow
-                     ))))
-         (ui/spacer 0 300))
+        :body (vertical-layout
+               (apply vertical-layout
+                      (for [row ss]
+                        (let [srow
+                              (ui/on
+                               :save (fn []
+                                       [[::save-to-db ss (:id row)]])
+                               :cleanup (fn []
+                                          [[::cleanup $ss (:id row)]])
+                               (spreadsheet-row {:row row
+                                                 :result (get results (:id row))}))
+                              srow-width 23]
+                          (vertical-layout
+                           (let [hover? (get extra [$row :hover])]
+                             (basic/on-hover
+                              {:hover? hover?
+                               :$body nil
+                               :body (if hover?
+                                       (button-bar {:ss ss
+                                                    :row-id (:id row)})
+                                       ;;(ui/spacer srow-width 5)
+                                       (ui/rectangle srow-width 5)
+                                       )}))
+                           srow
+                           ))))
+               (ui/spacer 0 300))
+        
         })))}))
 
 (defonce spreadsheet-state (atom {}))
 
+(defn sync-ns! [{:keys [name require import]}]
+  (binding [*ns* (the-ns 'user)]
+    (eval `(ns ~name
+             ~@(when (seq require)
+                 [`(:require ~@require)])
+             ~@(when (seq import)
+                 [`(:import ~@import)])))))
+
 (declare calc-spreadsheet)
 (defn run-results
   ([]
-   (run-results *ns*))
-  ([eval-ns]
-   (run-results eval-ns spreadsheet-state))
-  ([eval-ns atm]
+   (run-results spreadsheet-state))
+  ([atm]
    (let [[old _] (swap-vals! atm dissoc :ss-chan :result-thread)]
      (when-let [ss-chan (:ss-chan old)]
        (async/close! ss-chan)))
@@ -900,13 +965,25 @@
                                                       cache (get state :cache {})
                                                       side-effects (get state :side-effects {})
 
+                                                      ns-info (get state :ns-info)
+                                                      _ (assert ns-info)
+                                                      cache (if (not= (get state :last-ns-info)
+                                                                      ns-info)
+                                                              (do (sync-ns! ns-info)
+                                                                  ;; empty cache
+                                                                  {})
+                                                              ;; else
+                                                              cache)
+                                                      eval-ns (the-ns (:name ns-info))
+
                                                       {results :results
                                                        next-cache :cache
                                                        side-effects :side-effects} (calc-spreadsheet eval-ns cache side-effects ss)]
                                                   (swap! atm assoc
                                                          :results results
                                                          :side-effects side-effects
-                                                         :cache next-cache)
+                                                         :cache next-cache
+                                                         :last-ns-info ns-info)
                                                   (#'backend/glfw-post-empty-event))
                                                 (catch Throwable e
                                                   (prn e)))
@@ -920,28 +997,69 @@
 
      (add-watch atm ::update-results
                 (fn check-update-results [key ref old new]
-                  (let [ss (:ss new)]
-                    (when-not (= (:ss new)
-                                 (:ss old))
-                      (async/put! ss-chan (:ss new))))))
+                  (when-not (= (:ss new)
+                               (:ss old))
+                    (async/put! ss-chan (:ss new)))))
      nil)))
 
-(def my-spreadsheet
-  [])
+
+
+(def cfg {:store {:backend :file :path (.getAbsolutePath
+                                        (io/file "sstest"))}})
+
+
+(defn mem-db
+  ([]
+   (xt/start-node {})))
+
+(defn start-xtdb! []
+  (let [home-dir (System/getProperty "user.home")]
+    (assert (and home-dir
+                 (not= home-dir "")))
+    (letfn [(kv-store [dir]
+              {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                          :db-dir (io/file home-dir
+                                           ".clojure"
+                                           "devdb"
+                                           dir)
+                          :sync? true}})]
+      (xt/start-node
+       {:xtdb/tx-log (kv-store "data/dev/tx-log")
+        :xtdb/document-store (kv-store "data/dev/doc-store")
+        :xtdb/index-store (kv-store "data/dev/index-store")}))))
+
+(defonce xnode (delay (start-xtdb!)))
+(defn stop-xtdb! []
+  (.close @xnode))
 
 (defn init-spreadsheet []
   (swap! spreadsheet-state
          assoc
-         :ss my-spreadsheet
-         :ns {:ns/id (random-uuid)
-              :ns/name (gensym)})
+         :ss []
+         ;; :xtdb @xnode
+         :ns-info {:name 'foo.baz
+                   :require '([membrane.ui :as ui
+                               :refer [vertical-layout
+                                       horizontal-layout]]
+                              [clojure.java.io :as io]
+                              [com.phronemophobic.membrane.spreadsheet :as ss]
+                              [clojure.edn :as edn]
+                              [xtdb.api :as xt]
+                              clojure.set
+                              [clojure.string :as str]
+                              [clojure.data.json :as json])
+                   :import '(java.io.PushbackReader
+                             java.time.Instant)})
   nil)
 (init-spreadsheet)
 
 (defn current-spreadsheet []
   (:ss @spreadsheet-state))
 (defn run []
-  (run-results *ns*)
+  (swap! spreadsheet-state
+         assoc
+         :ns-info {:name (ns-name *ns*)})
+  (run-results)
   (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state)))
 
 (defmulti parse-src :editor)
@@ -1279,59 +1397,60 @@
   )
 
 (defn calc-spreadsheet [eval-ns cache side-effects ss]
-  (let [[env ss] (process-spreadsheet ss
-                                      [(complete-env parse-row)
-                                       process-make-fn
-                                       process-make-component
-                                       add-deps])]
-    (loop [ss (seq ss)
-           vals {}
-           bindings {}
-           next-cache {}
-           side-effects side-effects]
-      (if-not ss
-        {:cache next-cache
-         :results vals
-         :side-effects side-effects}
-        (let [row (first ss)
-              {:keys [sym form err]} row
-              cache-key [sym form err bindings]
-              [side-effect-result
-               result]
-              (if (:side-effect? row)
-                (if-let [ts (:side-effect-ts row)]
-                  (let [{result :result
-                         last-run-ts :side-effect-ts
-                         :as side-effect-result} (get side-effects (:id row))]
-                    (if (or (not last-run-ts)
-                            (not= last-run-ts ts))
-                      (let [result (calc-result eval-ns row bindings)]
-                        (prn "calculating side effect" (:name row))
-                        [{:result result
-                          :side-effect-ts ts}
-                         result])
-                      [side-effect-result
-                       result]))
+  (binding [*ns* eval-ns]
+    (let [[env ss] (process-spreadsheet ss
+                                        [(complete-env parse-row)
+                                         process-make-fn
+                                         process-make-component
+                                         add-deps])]
+      (loop [ss (seq ss)
+             vals {}
+             bindings {}
+             next-cache {}
+             side-effects side-effects]
+        (if-not ss
+          {:cache next-cache
+           :results vals
+           :side-effects side-effects}
+          (let [row (first ss)
+                {:keys [sym form err]} row
+                cache-key [sym form err bindings]
+                [side-effect-result
+                 result]
+                (if (:side-effect? row)
+                  (if-let [ts (:side-effect-ts row)]
+                    (let [{result :result
+                           last-run-ts :side-effect-ts
+                           :as side-effect-result} (get side-effects (:id row))]
+                      (if (or (not last-run-ts)
+                              (not= last-run-ts ts))
+                        (let [result (calc-result eval-ns row bindings)]
+                          (prn "calculating side effect" (:name row))
+                          [{:result result
+                            :side-effect-ts ts}
+                           result])
+                        [side-effect-result
+                         result]))
 
-                  ;; no ts. return exception
+                    ;; no ts. return exception
+                    [nil
+                     (wrap-result-constant
+                      (Exception. "Side Effect not marked to run yet.")
+                      nil)])
+
+                  ;; else not side effect
                   [nil
-                   (wrap-result-constant
-                    (Exception. "Side Effect not marked to run yet.")
-                    nil)])
-
-                ;; else not side effect
-                [nil
-                 (if-let [result (get cache cache-key)]
-                   result
-                   (let [row-bindings (into bindings (:bindings row))]
-                     (calc-result eval-ns row row-bindings)))])]
-          (recur (next ss)
-                 (assoc vals (:id row) result)
-                 (assoc bindings sym result)
-                 (assoc next-cache cache-key result)
-                 (if (:side-effect? row)
-                   (assoc side-effects (:id row) side-effect-result)
-                   side-effects)))))))
+                   (if-let [result (get cache cache-key)]
+                     result
+                     (let [row-bindings (into bindings (:bindings row))]
+                       (calc-result eval-ns row row-bindings)))])]
+            (recur (next ss)
+                   (assoc vals (:id row) result)
+                   (assoc bindings sym result)
+                   (assoc next-cache cache-key result)
+                   (if (:side-effect? row)
+                     (assoc side-effects (:id row) side-effect-result)
+                     side-effects))))))))
 
 (defn -main [& args]
 
@@ -1339,13 +1458,20 @@
   )
 
 
-(defn print-forms []
-  (clojure.pprint/pprint
-   (-> @spreadsheet-state
-       :ss
-       process-spreadsheet
-       second
-       (->> (map (juxt :name :form))))))
+(defn print-forms
+  ([]
+   (print-forms (:ss @spreadsheet-state)))
+  ([ss]
+   (clojure.pprint/pprint
+    (-> ss
+        process-spreadsheet
+        second
+        (->> (map (juxt :name :form)))))))
+
+
+(defeffect ::print-ss-forms [ss]
+  (print-forms ss))
+
 
 (defn get-ss []
   (-> @spreadsheet-state
@@ -1366,7 +1492,7 @@
 
 (defn fix-ids [ss]
   (let [ss (spec/transform [spec/ALL (spec/must :id) #(not (uuid? %))]
-                           (fn [_] (random-uuid))
+                           (fn [_] (genid))
                            ss)
         ss (spec/transform [spec/ALL
                             #(= :canvas (:editor %))
@@ -1376,7 +1502,7 @@
                             ELEMENT-TREE-WALKER
                             (spec/must :element/id)
                             #(not (uuid? %))]
-                           (fn [_] (random-uuid))
+                           (fn [_] (genid))
                            ss)]
     ss))
 
@@ -1486,128 +1612,103 @@
               )
   ,)
 
-(def cfg {:store {:backend :file :path (.getAbsolutePath
-                                        (io/file "sstest"))}})
 
 
 
-(defn start-xtdb! []
-  (letfn [(kv-store [dir]
-            {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
-                        :db-dir (io/file dir)
-                        :sync? true}})]
-    (xt/start-node
-     {:xtdb/tx-log (kv-store "data/dev/tx-log")
-      :xtdb/document-store (kv-store "data/dev/doc-store")
-      :xtdb/index-store (kv-store "data/dev/index-store")})))
 
-#_(defonce xnode (start-xtdb!))
-(declare xnode)
-(defn stop-xtdb! []
-  (.close xnode))
-
-
-
-(defn ->transaction [{:keys [ss ns]}]
+(defn ->transaction [{:keys [ss ns-info]}]
   (let [db-cells
         (->> ss
              (spec/transform [spec/ALL]
                              (fn [cell]
                                {:cell/id (:id cell)
+                                :xt/id {:cell/id (:id cell)}
                                 ;; :db/
                                 :cell/name (:name cell)
                                 ;; :cell/ns (ns-name *ns*)
                                 :cell/def (boolean (:def cell))
-                                :cell/editor (keyword
-                                              (namespace ::my-ns)
-                                              (name (:editor cell)))
+                                :cell/side-effect? (boolean (:side-effect? cell))
+                                :cell/editor (:editor cell)
                                 :cell.source/edn (->edn (:src cell))})))
-        db-ns (assoc (select-keys ns [:ns/name :ns/id])
-                     :ns/cells
-                     {;; :db/id (d/tempid nil)
-                      :array/array
-                      (vec
-                       (map-indexed
-                        (fn [i cell]
-                          {:array/object {:cell/id (:cell/id cell)}
-                           :array/idx i
-                           ;; :db/id (d/tempid nil)
-                           })
-                        db-cells))})]
-    (concat db-cells
-            [db-ns])))
+        cell-list {:xt/id (into {}
+                                (map-indexed (fn [idx cell]
+                                               [idx (:xt/id cell)]))
+                                db-cells)
+                   :cell/list (mapv :xt/id db-cells)}
+        db-ns {:xt/id {:ns/name (:name ns-info)}
+               :ns/name (:name ns-info)
+               :ns/require (->edn (:require ns-info))
+               :ns/import (->edn (:import ns-info))
+               :ns/cells (:xt/id cell-list)}]
+    (into []
 
-(defn state->transaction [state]
-  (let [ss (:ss state)
-        ns (:ns state)
-        transaction (->transaction
-                     {:ss (-> ss
-                              remove-ephemeral)
-                      :ns ns})]
-    transaction))
-
-#_(defn save-ss-db
-  ([]
-   (let [conn @conn]
-     (save-ss-db conn)))
-  ([conn]
-   (d/transact conn (state->transaction @spreadsheet-state))
-
-   nil))
-
-
-#_(defn load-ss-db
-  ([]
-   (let [conn @conn]
-     (load-ss-db conn)))
-  ([conn]
-   (let [])))
-
-#_(defeffect ::save-to-db [ss row-id]
-  (let [[env ss] (process-spreadsheet
-                  ss
-                  (remove #{process-make-fn} default-process-passes))
-
-        row (some #(when (= row-id (:id %))
-                     %)
-                  ss)
-        form (:form row)
-        _ (assert (and (seq? form)
-                       (= (first form) 'make-fn)))
-        [_ args ret] form
-        ret-id (get-in env [:bindings ret])
-        arg-ids (into #{}
-                      (map (fn [sym]
-                             (get-in env [:bindings sym])))
-                      args)
-        dep-ids (loop [deps (into #{ret-id} arg-ids)
-                       rows (seq (reverse (:rows env)))]
-                  (if rows
-                    (let [row (first rows)]
-                      (if (contains? deps (:id row))
-                        (recur (into deps (:deps row))
-                               (next rows))
-                        (recur deps (next rows))))
-                    deps))
-        ]
-    (d/transact @conn (->> ss
-                           (filter #(dep-ids (:id %)))
-                           remove-ephemeral
-                           ss->db-form))))
-
-
-
-
+          (comp cat
+                (map #(vector ::xt/put %)))
+          [db-cells
+           [cell-list
+            db-ns]])))
 
 (defn db-cell->cell
   [db-cell]
   (let [normalized-cell
-       {:id (:cell/id db-cell),
-        :name (:cell/name db-cell),
-        :src (clojure.edn/read-string (:cell.source/edn db-cell)),
-        :editor (-> db-cell :cell/editor :db/ident name keyword)
-        :def (:cell/def db-cell)}]
+        {:id (:cell/id db-cell),
+         :name (:cell/name db-cell),
+         :src (clojure.edn/read-string (:cell.source/edn db-cell)),
+         :editor (:cell/editor db-cell)
+         :side-effect? (:cell/side-effect? db-cell)
+         :def (:cell/def db-cell)}]
       normalized-cell))
+
+(defn db-ns->ns-info [ns]
+  {:name (:ns/name ns)
+   :require (edn/read-string (:ns/require ns))
+   :import (edn/read-string (:ns/import ns))})
+
+(defn ^:private db-result->sstate [result]
+  {:ns-info (db-ns->ns-info result)
+   :ss (mapv db-cell->cell
+             (-> result
+                 :ns/cells
+                 :cell/list))})
+
+(defn load-ns [db ns-name]
+  (let [result
+        (ffirst
+         (xt/q db
+               '{:find [(pull ?e [* {:ns/cells [{:cell/list [*]}]}])]
+                 :in [ns-name]
+                 :where
+                 [[?e :ns/name ns-name]]}
+               ns-name))]
+    (db-result->sstate result)))
+
+(defeffect ::save-to-db [node ns-info ss]
+  (let [tx (xt/submit-tx node (->transaction
+                             {:ns-info ns-info
+                              :ss ss}))]
+    (xt/await-tx node tx)))
+
+(defeffect ::load-from-db [node $ns-info $ss ns-name]
+  (let [{:keys [ns-info ss]} (load-ns (xt/db node) ns-name)]
+    (when (and ns-info ss)
+      (dispatch! :set $ns-info ns-info)
+      (dispatch! :set $ss ss))))
+
+(defeffect ::show-load-options [$load-options node]
+  (let [ns-names (->> (xt/q (xt/db node)
+                            '{:find [?name]
+                              :where [[_ :ns/name ?name]]})
+                      (map first))]
+    (dispatch! :set $load-options ns-names)))
+
+(comment
+
+  (def db (mem-db))
+  (xt/submit-tx db (->transaction (select-keys @spreadsheet-state [:ss :ns-info])))
+
+  ,
+  )
+
 
 
 
