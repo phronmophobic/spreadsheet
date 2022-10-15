@@ -2,6 +2,8 @@
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         com.phronemophobic/membrane {:mvn/version "0.10.3-beta"}
         com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.9.31.0-beta"}
+        com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.9.31.0-beta"}
+        com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.9.31.0-beta"}
 
         ;; com.phronemophobic/dev-db {:local/root "../dev-db"}
         com.xtdb/xtdb-core {:mvn/version "1.21.0"}
