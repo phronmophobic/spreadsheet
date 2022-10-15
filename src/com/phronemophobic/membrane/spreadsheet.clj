@@ -1452,10 +1452,7 @@
                      (assoc side-effects (:id row) side-effect-result)
                      side-effects))))))))
 
-(defn -main [& args]
 
-  (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state))
-  )
 
 
 (defn print-forms
@@ -1712,3 +1709,10 @@
 
 
 
+(defn -main [& args]
+  (swap! spreadsheet-state
+         assoc
+         :ns-info {:name (ns-name *ns*)})
+  (run-results)
+  (backend/run-sync (com/make-app #'spreadsheet-editor spreadsheet-state))
+  (async/close! (:ss-chan @spreadsheet-state)))
