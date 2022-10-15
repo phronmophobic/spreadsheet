@@ -11,7 +11,7 @@
 
         com.phronemophobic/viscous {:mvn/version "1.3.2"}
 
-        com.phronemophobic/schematic {:local/root "../schematic"}
+        com.phronemophobic/schematic {:mvn/version "0.1.0"}
         org.clojure/core.async {:mvn/version "1.5.648"}
         mogenslund/liquid {:mvn/version "2.0.3"}
         org.clojure/tools.analyzer.jvm {:mvn/version "1.1.0"}
@@ -33,7 +33,8 @@
   :project {:extra-deps {com.clojure-goes-fast/clj-async-profiler {:mvn/version "0.5.1"}
                          com.phronemophobic/clj-reddit {:local/root "../clj-reddit"}
                          com.phronemophobic/membrane {:local/root "../membrane2"}
-                         com.phronemophobic.membrane/viscous {:local/root "../viscous"}}
+                         com.phronemophobic.membrane/viscous {:local/root "../viscous"}
+                         com.phronemophobic/schematic {:local/root "../schematic"}}
             :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
                        "-Djdk.attach.allowAttachSelf=true"
                        "-XX:-OmitStackTraceInFastThrow"
