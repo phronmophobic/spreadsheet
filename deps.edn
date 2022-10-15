@@ -25,10 +25,10 @@
         ubergraph/ubergraph {:mvn/version "0.8.2"}
         ,}
  :aliases
- {:run-m {:main-opts ["-m" "com.phronemophobic.membrane.spreadsheet"]}
-  :run-x {:ns-default com.phronemophobic.membrane.spreadsheet
-          :exec-fn greet
-          :exec-args {:name "Clojure"}}
+ {
+  :build {:deps {io.github.clojure/tools.build {:git/tag "v0.8.3" :git/sha "0d20256"}
+                 slipset/deps-deploy {:mvn/version "RELEASE"}}
+          :ns-default build}
 
   :project {:extra-deps {com.clojure-goes-fast/clj-async-profiler {:mvn/version "0.5.1"}
                          com.phronemophobic/clj-reddit {:local/root "../clj-reddit"}
@@ -39,30 +39,4 @@
                        "-Djdk.attach.allowAttachSelf=true"
                        "-XX:-OmitStackTraceInFastThrow"
                        "-XX:+DebugNonSafepoints"
-                       "-Xmx8096M"]}
-
-  :test {:extra-paths ["test"]
-         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}}
-  :skija {:extra-deps {org.jetbrains.skija/skija-macos-x64 {:mvn/version "0.89.18"}
-                       org.lwjgl/lwjgl {:mvn/version "3.2.3"}
-                       org.lwjgl/lwjgl$natives-macos {:mvn/version "3.2.3"}
-                       org.lwjgl/lwjgl-glfw {:mvn/version "3.2.3"}
-                       org.lwjgl/lwjgl-glfw$natives-macos {:mvn/version "3.2.3"}
-                       org.lwjgl/lwjgl-opengl {:mvn/version "3.2.3"}
-                       org.lwjgl/lwjgl-opengl$natives-macos {:mvn/version "3.2.3"}}}
-  :runner
-  {:extra-deps {com.cognitect/test-runner
-                {:git/url "https://github.com/cognitect-labs/test-runner"
-                 :sha "b6b3193fcc42659d7e46ecd1884a228993441182"}}
-   :main-opts ["-m" "cognitect.test-runner"
-               "-d" "test"]}
-  :uberjar {:replace-deps {com.github.seancorfield/depstar {:mvn/version "2.1.303"}}
-            :exec-fn hf.depstar/uberjar
-            :exec-args {:aot true
-                        :jar "spreadsheet.jar"
-                        :main-class "com.phronemophobic.membrane.spreadsheet"
-                        :sync-pom true}}}
-
- :mvn/repos
- {"space-maven" {:url "https://packages.jetbrains.team/maven/p/skija/maven"}
-  "sonatype-oss-public" {:url "https://oss.sonatype.org/content/groups/public/"}}}
+                       "-Xmx8096M"]}}}
