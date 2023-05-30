@@ -1,9 +1,11 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
-        com.phronemophobic/membrane {:mvn/version "0.10.3-beta"}
-        com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.9.31.0-beta"}
-        com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.9.31.0-beta"}
-        com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.9.31.0-beta"}
+        com.phronemophobic/membrane {:mvn/version "0.13.0-beta"}
+        com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.13-beta"}
+        com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.13-beta"}
+        com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.13-beta"}
+
+        membrane.alpha/stretch {:git/sha "c2aec87dc04db36ca23c9d88888c561dac7b198a" :git/url "https://github.com/phronmophobic/membrane.alpha.stretch"}
 
         ;; com.phronemophobic/dev-db {:local/root "../dev-db"}
         com.xtdb/xtdb-core {:mvn/version "1.21.0"}
