@@ -12,6 +12,7 @@
              :refer [defui
                      defeffect]]
             [membrane.skia :as backend]
+            [membrane.alpha.stretch :as stretch]
             ;; [membrane.java2d :as backend]
             [com.phronemophobic.viscous :as iv
              :refer [inspect]]
@@ -828,112 +829,127 @@
                                   [[::add-spreadsheet-row $ss editor-type]]))}))))
 
 
+(defn ^:private stretch-bottom [[cw ch] top bottom]
+  (ui/vertical-layout
+   top
+   (let [scroll-button-size 7]
+    (assoc bottom
+           :scroll-bounds
+           [(max (- cw scroll-button-size)
+                 0)
+
+            (max 0
+                 (- ch (ui/height top)
+                    scroll-button-size))]))))
+
 (defui spreadsheet-editor [{:keys [ss results
                                    xtdb
                                    load-options
                                    ns-info]}]
-  (wrap-drag-and-drop
-   {:$body nil
-    :body
-    (ui/wrap-on
-     :key-event
-     (fn [handler key scancode actions mods]
-       (let [intents (handler key scancode actions mods)
-             shift-down? (get context :shift-down?)
-             shift? (= 1 (bit-and mods 1))]
-         (if (not= shift? shift-down?)
-           (conj intents [:set $shift-down? shift?])
-           intents)))
-     (vertical-layout
-      (button-bar {:ss ss})
-      #_(basic/button {:text "print-forms"
-                       :on-click
-                       (fn []
-                         [[::print-ss-forms ss]])}
-                      )
-      (let [edit-ns? (get extra :edit-ns?)
-            temp-ns-name (get extra :temp-ns-name)]
-        (cond
-
-          edit-ns?
-          (ui/vertical-layout
-           (basic/button {:text "save"
+  (let [container-size (:membrane.stretch/container-size context)]
+    (wrap-drag-and-drop
+     {:$body nil
+      :body
+      (ui/wrap-on
+       :key-event
+       (fn [handler key scancode actions mods]
+         (let [intents (handler key scancode actions mods)
+               shift-down? (get context :shift-down?)
+               shift? (= 1 (bit-and mods 1))]
+           (if (not= shift? shift-down?)
+             (conj intents [:set $shift-down? shift?])
+             intents)))
+       (stretch-bottom
+        container-size
+        (ui/vertical-layout
+         (button-bar {:ss ss})
+         #_(basic/button {:text "print-forms"
                           :on-click
                           (fn []
-                            [[:set $edit-ns? false]
-                             [:update $ns-info
-                              assoc :name (symbol temp-ns-name)]])})
-           (basic/textarea {:text temp-ns-name}))
+                            [[::print-ss-forms ss]])}
+                         )
+         (let [edit-ns? (get extra :edit-ns?)
+               temp-ns-name (get extra :temp-ns-name)]
+           (cond
 
-          load-options
-          (apply
-           ui/vertical-layout
-           
-           (basic/button {:text "cancel"
-                          :on-click
-                          (fn []
-                            [[:set $load-options nil]])})
-           (for [option load-options]
-             (basic/button {:text option
-                            :on-click
-                            (fn []
-                              [[::load-from-db xtdb $ns-info $ss option]
-                               [:set $load-options nil]])})))
-          
-          :else
-          (apply
-           ui/horizontal-layout
-           (interpose
-            (ui/spacer 8)
-            [(basic/button {:text "edit"
-                            :on-click
-                            (fn []
-                              [[:set $edit-ns? true]
-                               [:set $temp-ns-name (name (:name ns-info))]])})
-             (basic/button {:text "save"
-                            :on-click
-                            (fn []
-                              [[::save-to-db xtdb ns-info ss]])})
-             (basic/button {:text "load"
-                            :on-click
-                            (fn []
-                              [[::show-load-options $load-options xtdb]])})
+             edit-ns?
+             (ui/vertical-layout
+              (basic/button {:text "save"
+                             :on-click
+                             (fn []
+                               [[:set $edit-ns? false]
+                                [:update $ns-info
+                                 assoc :name (symbol temp-ns-name)]])})
+              (basic/textarea {:text temp-ns-name}))
+
+             load-options
+             (apply
+              ui/vertical-layout
+              (basic/button {:text "cancel"
+                             :on-click
+                             (fn []
+                               [[:set $load-options nil]])})
+              (for [option load-options]
+                (basic/button {:text option
+                               :on-click
+                               (fn []
+                                 [[::load-from-db xtdb $ns-info $ss option]
+                                  [:set $load-options nil]])})))
              
-             (ui/label (:name ns-info))])
-           
-           
-           )))
-      (basic/scrollview
-       {:scroll-bounds [1200 800]
-        :$body nil
-        :body (vertical-layout
-               (apply vertical-layout
-                      (for [row ss]
-                        (let [srow
-                              (ui/on
-                               :save (fn []
-                                       [[::save-to-db ss (:id row)]])
-                               :cleanup (fn []
-                                          [[::cleanup $ss (:id row)]])
-                               (spreadsheet-row {:row row
-                                                 :result (get results (:id row))}))
-                              srow-width 23]
-                          (vertical-layout
-                           (let [hover? (get extra [$row :hover])]
-                             (basic/on-hover
-                              {:hover? hover?
-                               :$body nil
-                               :body (if hover?
-                                       (button-bar {:ss ss
-                                                    :row-id (:id row)})
-                                       ;;(ui/spacer srow-width 5)
-                                       (ui/rectangle srow-width 5)
-                                       )}))
-                           srow
-                           ))))
-               (ui/spacer 0 300))
-        
-        })))}))
+             :else
+             (apply
+              ui/horizontal-layout
+              (interpose
+               (ui/spacer 8)
+               [(basic/button {:text "edit"
+                               :on-click
+                               (fn []
+                                 [[:set $edit-ns? true]
+                                  [:set $temp-ns-name (name (:name ns-info))]])})
+                (basic/button {:text "save"
+                               :on-click
+                               (fn []
+                                 [[::save-to-db xtdb ns-info ss]])})
+                (basic/button {:text "load"
+                               :on-click
+                               (fn []
+                                 [[::show-load-options $load-options xtdb]])})
+                
+                (ui/label (:name ns-info))])
+              
+              
+              ))))
+        (basic/scrollview
+         {:scroll-bounds [1200 800]
+          :$body nil
+          :body (vertical-layout
+                 (apply vertical-layout
+                        (for [row ss]
+                          (let [srow
+                                (ui/on
+                                 :save (fn []
+                                         [[::save-to-db ss (:id row)]])
+                                 :cleanup (fn []
+                                            [[::cleanup $ss (:id row)]])
+                                 (spreadsheet-row {:row row
+                                                   :result (get results (:id row))}))
+                                srow-width 23]
+                            (vertical-layout
+                             (let [hover? (get extra [$row :hover])]
+                               (basic/on-hover
+                                {:hover? hover?
+                                 :$body nil
+                                 :body (if hover?
+                                         (button-bar {:ss ss
+                                                      :row-id (:id row)})
+                                         ;;(ui/spacer srow-width 5)
+                                         (ui/rectangle srow-width 5)
+                                         )}))
+                             srow
+                             ))))
+                 (ui/spacer 0 300))
+          
+          })))})))
 
 (defonce spreadsheet-state (atom {}))
 
@@ -1060,7 +1076,8 @@
          assoc
          :ns-info {:name (ns-name *ns*)})
   (run-results)
-  (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state)))
+  (backend/run (com/make-app #'spreadsheet-editor spreadsheet-state)
+    {:include-container-info true}))
 
 (defmulti parse-src :editor)
 (defmethod parse-src :code-editor [row]
