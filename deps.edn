@@ -5,7 +5,7 @@
         com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.14-beta"}
         com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.14-beta"}
 
-        membrane.alpha/stretch {:git/sha "c2aec87dc04db36ca23c9d88888c561dac7b198a" :git/url "https://github.com/phronmophobic/membrane.alpha.stretch"}
+        com.phronemophobic/membrane.stretch.alpha {:mvn/version "0.1.0"}
 
         ;; com.phronemophobic/dev-db {:local/root "../dev-db"}
         com.xtdb/xtdb-core {:mvn/version "1.21.0"}
