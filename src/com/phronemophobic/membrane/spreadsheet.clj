@@ -858,9 +858,9 @@
   (into []
         (map (fn [expr]
                (if (and (seq expr)
-                        (= 'get (first expr))
+                        ('#{get find} (first expr))
                         (not (literal? (second expr))))
-                 (list 'get (list 'quote (second expr)))
+                 (list (first expr) (list 'quote (second expr)))
                  expr)))
         path))
 (defn- path->expression [nm path]
