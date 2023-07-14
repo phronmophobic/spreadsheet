@@ -7,13 +7,13 @@ Alpha software.
 Leiningen dependency:
 
 ```clojure
-[com.phronemophobic/spreadsheet "0.1.1"]
+[com.phronemophobic/spreadsheet "0.1.3"]
 ```
 
 deps.edn dependency:
 
 ```clojure
-com.phronemophobic/spreadsheet {:mvn/version "0.1.1"}
+com.phronemophobic/spreadsheet {:mvn/version "0.1.3"}
 ```
 
 ## Usage
@@ -21,7 +21,7 @@ com.phronemophobic/spreadsheet {:mvn/version "0.1.1"}
 ### Try it!
 
 ```sh
-clj -Sdeps {:deps\ {com.phronemophobic/spreadsheet\ {:mvn/version\ \"0.1.1\"}}} -M -m com.phronemophobic.membrane.spreadsheet
+clj -Sdeps {:deps\ {com.phronemophobic/spreadsheet\ {:mvn/version\ \"0.1.3\"}}} -M -m com.phronemophobic.membrane.spreadsheet
 ```
 
 ### Programmatic usage
