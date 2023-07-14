@@ -1827,5 +1827,6 @@
          assoc
          :ns-info {:name (ns-name *ns*)})
   (run-results)
-  (backend/run-sync (com/make-app #'spreadsheet-editor spreadsheet-state))
+  (backend/run-sync (com/make-app #'spreadsheet-editor spreadsheet-state)
+                    {:include-container-info true})
   (async/close! (:ss-chan @spreadsheet-state)))
