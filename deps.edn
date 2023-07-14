@@ -1,9 +1,9 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
-        com.phronemophobic/membrane {:mvn/version "0.13.1-beta"}
-        com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.13-beta"}
-        com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.13-beta"}
-        com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.13-beta"}
+        com.phronemophobic/membrane {:mvn/version "0.14.1-beta"}
+        com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.14-beta"}
+        com.phronemophobic.membrane/skialib-macosx-x86-64 {:mvn/version "0.14-beta"}
+        com.phronemophobic.membrane/skialib-linux-x86-64 {:mvn/version "0.14-beta"}
 
         membrane.alpha/stretch {:git/sha "c2aec87dc04db36ca23c9d88888c561dac7b198a" :git/url "https://github.com/phronmophobic/membrane.alpha.stretch"}
 
@@ -37,7 +37,7 @@
                          com.phronemophobic/membrane {:local/root "../membrane2"}
                          com.phronemophobic/viscous {:local/root "../viscous"}
                          com.phronemophobic/schematic {:local/root "../schematic"}
-                         com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.13-beta"}}
+                         com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.14-beta"}}
             :jvm-opts ["-XX:+UnlockDiagnosticVMOptions"
                        "-Djdk.attach.allowAttachSelf=true"
                        "-XX:-OmitStackTraceInFastThrow"
