@@ -21,6 +21,7 @@
             [clojure.zip :as z]
             [clojure.tools.analyzer.jvm :as ana.jvm]
             [membrane.components.code-editor.code-editor :as code-editor]
+            [membrane.alpha.component.drag-and-drop :as dnd]
             [liq.buffer :as buffer]
 
             xtdb.rocksdb
@@ -133,41 +134,44 @@
                                    drag-start
                                    drag-init
                                    body]}]
-  (ui/on
-   (ui/wrap-on
-    :mouse-down
-    (fn [handler pos]
-      (let [intents (handler pos)]
-        (if-let [intent (some #(when (= (first %) :start-drag)
-                                 %)
-                              (reverse intents))]
-          (concat (remove #(= (first %) :start-drag)
-                          intents)
-                  [[:set $drag-start pos]
-                   [:set $drag-init (second intent)]])
-          intents)))
-    :mouse-move
-    (fn [handler pos]
-      (let [intents (handler pos)]
-        (if (and drag-start
-                 (> (distance drag-start pos) 10))
-          (concat intents
-                  [[:delete $drag-start]
-                   [:delete $drag-init]
-                   [:set $drag drag-init]])
-          ;; else
-          intents)))
-    :mouse-up
-    (fn [handler pos]
-      (if (or drag drag-start drag-init)
+  (dnd/drag-and-drop
+   {:$body nil
+    :body
+    (ui/on
+     (ui/wrap-on
+      :mouse-down
+      (fn [handler pos]
         (let [intents (handler pos)]
-          (concat
-           intents
-           [[:set $drag nil]
-            [:delete $drag-start]
-            [:delete $drag-init]]))
-        (handler pos)))
-    body))
+          (if-let [intent (some #(when (= (first %) :start-drag)
+                                   %)
+                                (reverse intents))]
+            (concat (remove #(= (first %) :start-drag)
+                            intents)
+                    [[:set $drag-start pos]
+                     [:set $drag-init (second intent)]])
+            intents)))
+      :mouse-move
+      (fn [handler pos]
+        (let [intents (handler pos)]
+          (if (and drag-start
+                   (> (distance drag-start pos) 10))
+            (concat intents
+                    [[:delete $drag-start]
+                     [:delete $drag-init]
+                     [:set $drag drag-init]])
+            ;; else
+            intents)))
+      :mouse-up
+      (fn [handler pos]
+        (if (or drag drag-start drag-init)
+          (let [intents (handler pos)]
+            (concat
+             intents
+             [[:set $drag nil]
+              [:delete $drag-start]
+              [:delete $drag-init]]))
+          (handler pos)))
+      body))})
   )
 
 (defui wrap-resizing [{:keys [resizing?
@@ -730,6 +734,13 @@
         (ui/padding 2
          (ui/filled-rectangle [0 0 0] 8 8)))})))
 
+(defn wrap-drag-start [nm row]
+  (ui/on
+   ::dnd/drag-start
+   (fn [m]
+     [[::dnd/drag-start (assoc m :name nm)]])
+   row))
+
 (defui spreadsheet-row [{:keys [row result]}]
 
   (horizontal-layout
@@ -771,13 +782,14 @@
                (when-let [result (-success result)]
                  result)
                (constantly nil))))
-           (iv/inspector {:obj (or result
-                                   (iv/wrap nil))
-                          :width (get inspector-extra :width 40)
-                          :height (get row :height 1)
-                          :show-context? (get inspector-extra :show-context?)
-                          :extra inspector-extra
-                          }))
+           (wrap-drag-start
+            (:name row)
+            (iv/inspector {:obj (or result
+                                    (iv/wrap nil))
+                           :width (get inspector-extra :width 40)
+                           :height (get row :height 1)
+                           :show-context? (get inspector-extra :show-context?)
+                           :extra inspector-extra})))
          [w h] (ui/bounds pv)
          toggle-view (ui/on
                       :mouse-down
@@ -791,26 +803,88 @@
                     toggle-view)
       ])))
 
-(defeffect ::insert-spreadsheet-row [$spreadsheet row-id editor-type]
+(defeffect ::insert-spreadsheet-row [$spreadsheet row-id editor-type & {:as row}]
   (dispatch! :update $spreadsheet
              (fn [spreadsheet]
                (into []
                      cat
                      [(take-while #(not= row-id (:id %)) spreadsheet)
-                      [(init-editor {:name (name (gensym))
-                                     :id (genid)
-                                     :editor editor-type} )]
+                      [(merge
+                        (init-editor {:name (name (gensym))
+                                      :id (genid)
+                                      :editor editor-type} )
+                        row)]
                       (drop-while #(not= row-id (:id %)) spreadsheet)]))))
 
 
 
 
-(defeffect ::add-spreadsheet-row [$spreadsheet editor-type]
+(defeffect ::add-spreadsheet-row [$spreadsheet editor-type & {:as row}]
   (dispatch! :update $spreadsheet conj
-             (init-editor {:name (name (gensym))
-                           :id (genid)
-                           :editor editor-type} )
-             ))
+             (merge (init-editor
+                     {:name (name (gensym))
+                      :id (genid)
+                      :editor editor-type})
+                    row)))
+
+(defn simplify-path [path]
+  (loop [last-expr nil
+         simplified-path []
+         path (seq path)]
+    (if path
+      (let [part (first path)
+            op (first part)]
+        (if (and (= 'find (first last-expr))
+                 ('#{val} op))
+          (let [prev-arg (second last-expr)]
+            (recur nil
+                   (conj (pop simplified-path)
+                         `(~'get ~prev-arg))
+                   (next path)))
+          (recur part
+                 (conj simplified-path part)
+                 (next path))))
+      simplified-path)
+    ))
+
+(defn- literal? [o]
+  (or (number? o)
+      (string? o)
+      (keyword? o)
+      (nil? o)
+      (boolean? o)
+      (char? o)))
+(defn- add-quotes-if-necessary [path]
+  (into []
+        (map (fn [expr]
+               (if (and (seq expr)
+                        (= 'get (first expr))
+                        (not (literal? (second expr))))
+                 (list 'get (list 'quote (second expr)))
+                 expr)))
+        path))
+(defn- path->expression [nm path]
+  `(~'-> ~(read-string nm)
+    ~@(-> path
+          simplify-path
+          add-quotes-if-necessary)))
+(defeffect ::drop-in-spreadsheet-row [$spreadsheet row-id nm path]
+  (let [expr (path->expression nm path)
+        row
+        {:src (buffer/buffer (with-out-str
+                               (clojure.pprint/pprint expr))
+                             {:mode :insert})}
+        editor-type :code-editor]
+   (if row-id
+     (dispatch! ::insert-spreadsheet-row
+                $spreadsheet
+                row-id
+                editor-type
+                row)
+     (dispatch! ::add-spreadsheet-row
+                $spreadsheet
+                editor-type
+                row))))
 
 
 (defui button-bar [{:keys [ss row-id]}]
@@ -845,7 +919,9 @@
 (defui spreadsheet-editor [{:keys [ss results
                                    xtdb
                                    load-options
-                                   ns-info]}]
+                                   ns-info
+                                   ^:membrane.component/contextual
+                                   drop-object]}]
   (let [container-size (:membrane.stretch/container-size context)]
     (wrap-drag-and-drop
      {:$body nil
@@ -922,34 +998,54 @@
         (basic/scrollview
          {:scroll-bounds [1200 800]
           :$body nil
-          :body (vertical-layout
-                 (apply vertical-layout
-                        (for [row ss]
-                          (let [srow
-                                (ui/on
-                                 :save (fn []
-                                         [[::save-to-db ss (:id row)]])
-                                 :cleanup (fn []
-                                            [[::cleanup $ss (:id row)]])
-                                 (spreadsheet-row {:row row
-                                                   :result (get results (:id row))}))
-                                srow-width 23]
-                            (vertical-layout
-                             (let [hover? (get extra [$row :hover])]
-                               (basic/on-hover
-                                {:hover? hover?
-                                 :$body nil
-                                 :body (if hover?
-                                         (button-bar {:ss ss
-                                                      :row-id (:id row)})
-                                         ;;(ui/spacer srow-width 5)
-                                         (ui/rectangle srow-width 5)
-                                         )}))
-                             srow
-                             ))))
-                 (ui/spacer 0 300))
-          
-          })))})))
+          :body
+          (vertical-layout
+           (vertical-layout
+            (apply vertical-layout
+                   (for [row ss]
+                     (let [srow
+                           (ui/on
+                            :save (fn []
+                                    [[::save-to-db ss (:id row)]])
+                            :cleanup (fn []
+                                       [[::cleanup $ss (:id row)]])
+                            (spreadsheet-row {:row row
+                                              :result (get results (:id row))}))
+                           srow-width 23]
+                       (vertical-layout
+                        (if drop-object
+                          (let [hover? (get extra [$row :drag-hover])]
+                            (dnd/on-drop
+                            (fn [_ m]
+                              [[::drop-in-spreadsheet-row $ss (:id row)
+                                (:name m) (:path m)]])
+                            (dnd/on-drag-hover
+                             {:hover? hover?
+                              :$body nil
+                              :body
+                              (if hover?
+                                (ui/with-color [1 0 0]
+                                  (ui/rectangle srow-width 5))
+                                (ui/rectangle srow-width 5))})))
+                          (let [hover? (get extra [$row :hover])]
+                            (basic/on-hover
+                             {:hover? hover?
+                              :$body nil
+                              :body (if hover?
+                                      (button-bar {:ss ss
+                                                   :row-id (:id row)})
+                                      ;;(ui/spacer srow-width 5)
+                                      (ui/rectangle srow-width 5)
+                                      )})))
+                        srow))))
+            (when drop-object
+              (dnd/on-drop
+               (fn [_ m]
+                 [[::drop-in-spreadsheet-row $ss nil
+                   (:name m) (:path m)]])
+               (ui/filled-rectangle [0.7 0.5 0.5]
+                                    32 32)))
+            (ui/spacer 0 300)))})))})))
 
 (defonce spreadsheet-state (atom {}))
 
