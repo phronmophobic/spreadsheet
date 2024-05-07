@@ -799,7 +799,7 @@
                                            8 8))]
      [
       pv
-      (ui/translate (- w 8) 0
+      (ui/translate (max 0 (- w 8)) 0
                     toggle-view)
       ])))
 
