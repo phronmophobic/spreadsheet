@@ -735,11 +735,12 @@
         (ui/padding 2
          (ui/filled-rectangle [0 0 0] 8 8)))})))
 
-(defn wrap-drag-start [nm row]
+;; adds name
+(defn wrap-drag-start-name [nm row]
   (ui/on
    ::dnd/drag-start
    (fn [m]
-     [[::dnd/drag-start (assoc m :name nm)]])
+     [[::dnd/drag-start (assoc-in m [::dnd/obj :name] nm)]])
    row))
 
 (defui spreadsheet-row [{:keys [row result]}]
@@ -783,7 +784,7 @@
                (when-let [result (-success result)]
                  result)
                (constantly nil))))
-           (wrap-drag-start
+           (wrap-drag-start-name
             (:name row)
             (iv/inspector {:obj (or result
                                     (iv/wrap nil))
