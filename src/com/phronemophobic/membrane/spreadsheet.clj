@@ -129,6 +129,7 @@
     (Math/pow (- x2 x1) 2)
     (Math/pow (- y2 y1) 2))))
 
+;; I believe this is only used for canvas editor
 (defui wrap-drag-and-drop [{:keys [^:membrane.component/contextual
                                    drag
                                    drag-start
