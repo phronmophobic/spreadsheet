@@ -95,7 +95,10 @@
   iv/PWrapped
   (-unwrap [_]
     (or error success)
-    ))
+    )
+
+  clojure.lang.IDeref
+  (deref [this] (iv/-unwrap this)))
 
 (defn wrap-result [re-eval error success]
   (->AResult re-eval error success))
@@ -129,7 +132,6 @@
     (Math/pow (- x2 x1) 2)
     (Math/pow (- y2 y1) 2))))
 
-;; I believe this is only used for canvas editor
 (defui wrap-drag-and-drop [{:keys [^:membrane.component/contextual
                                    drag
                                    drag-start
@@ -870,23 +872,28 @@
     ~@(-> path
           simplify-path
           add-quotes-if-necessary)))
-(defeffect ::drop-in-spreadsheet-row [$spreadsheet row-id nm path]
-  (let [expr (path->expression nm path)
-        row
-        {:src (buffer/buffer (with-out-str
-                               (clojure.pprint/pprint expr))
-                             {:mode :insert})}
+(defeffect ::drop-in-spreadsheet-row [{:keys [row-id obj]
+                                       $spreadsheet :$ss
+                                       spreadsheet-id ::id}]
+  (let [expr (if (and (= spreadsheet-id
+                         (::id obj))
+                      (seq (:path obj)))
+               (path->expression (:name obj) (:path obj))
+               @(:x obj))
+        row {:src (buffer/buffer (with-out-str
+                                   (clojure.pprint/pprint expr))
+                                 {:mode :insert})}
         editor-type :code-editor]
-   (if row-id
-     (dispatch! ::insert-spreadsheet-row
-                $spreadsheet
-                row-id
-                editor-type
-                row)
-     (dispatch! ::add-spreadsheet-row
-                $spreadsheet
-                editor-type
-                row))))
+    (if row-id
+        (dispatch! ::insert-spreadsheet-row
+                   $spreadsheet
+                   row-id
+                   editor-type
+                   row)
+        (dispatch! ::add-spreadsheet-row
+                   $spreadsheet
+                   editor-type
+                   row))))
 
 
 (defui button-bar [{:keys [ss row-id]}]
@@ -905,149 +912,161 @@
                                   [[::add-spreadsheet-row $ss editor-type]]))}))))
 
 
+(defn wrap-drag-start-spreadsheet-id [id body]
+  (ui/on
+   ::drop-in-spreadsheet-row
+   (fn [m]
+     [[::drop-in-spreadsheet-row (assoc m ::id id)]])
+   ::dnd/drag-start
+   (fn [m]
+     [[::dnd/drag-start (assoc-in m [::dnd/obj ::id] id)]])
+   body))
+
 (defn ^:private stretch-bottom [[cw ch] top bottom]
   (ui/vertical-layout
    top
    (let [scroll-button-size 7]
-    (assoc bottom
-           :scroll-bounds
-           [(max (- cw scroll-button-size)
-                 0)
+     (assoc bottom
+            :scroll-bounds
+            [(max (- cw scroll-button-size)
+                  0)
 
-            (max 0
-                 (- ch (ui/height top)
-                    scroll-button-size))]))))
+             (max 0
+                  (- ch (ui/height top)
+                     scroll-button-size))]))))
 
 (defui spreadsheet-editor [{:keys [ss results
                                    xtdb
                                    load-options
                                    ns-info
                                    ^:membrane.component/contextual
-                                   drop-object]}]
+                                   drop-object]
+                            :as args}]
   (let [container-size (:membrane.stretch/container-size context)]
     (wrap-drag-and-drop
      {:$body nil
       :body
-      (ui/wrap-on
-       :key-event
-       (fn [handler key scancode actions mods]
-         (let [intents (handler key scancode actions mods)
-               shift-down? (get context :shift-down?)
-               shift? (= 1 (bit-and mods 1))]
-           (if (not= shift? shift-down?)
-             (conj intents [:set $shift-down? shift?])
-             intents)))
-       (stretch-bottom
-        container-size
-        (ui/vertical-layout
-         (button-bar {:ss ss})
-         #_(basic/button {:text "print-forms"
-                          :on-click
-                          (fn []
-                            [[::print-ss-forms ss]])}
-                         )
-         (let [edit-ns? (get extra :edit-ns?)
-               temp-ns-name (get extra :temp-ns-name)]
-           (cond
+      (wrap-drag-start-spreadsheet-id
+       (::id args)
+       (ui/wrap-on
+        :key-event
+        (fn [handler key scancode actions mods]
+          (let [intents (handler key scancode actions mods)
+                shift-down? (get context :shift-down?)
+                shift? (= 1 (bit-and mods 1))]
+            (if (not= shift? shift-down?)
+              (conj intents [:set $shift-down? shift?])
+              intents)))
+        (stretch-bottom
+         container-size
+         (ui/vertical-layout
+          (button-bar {:ss ss})
+          #_(basic/button {:text "print-forms"
+                           :on-click
+                           (fn []
+                             [[::print-ss-forms ss]])}
+                          )
+          (let [edit-ns? (get extra :edit-ns?)
+                temp-ns-name (get extra :temp-ns-name)]
+            (cond
 
-             edit-ns?
-             (ui/vertical-layout
-              (basic/button {:text "save"
-                             :on-click
-                             (fn []
-                               [[:set $edit-ns? false]
-                                [:update $ns-info
-                                 assoc :name (symbol temp-ns-name)]])})
-              (basic/textarea {:text temp-ns-name}))
+              edit-ns?
+              (ui/vertical-layout
+               (basic/button {:text "save"
+                              :on-click
+                              (fn []
+                                [[:set $edit-ns? false]
+                                 [:update $ns-info
+                                  assoc :name (symbol temp-ns-name)]])})
+               (basic/textarea {:text temp-ns-name}))
 
-             load-options
-             (apply
-              ui/vertical-layout
-              (basic/button {:text "cancel"
-                             :on-click
-                             (fn []
-                               [[:set $load-options nil]])})
-              (for [option load-options]
-                (basic/button {:text option
-                               :on-click
-                               (fn []
-                                 [[::load-from-db xtdb $ns-info $ss option]
-                                  [:set $load-options nil]])})))
-             
-             :else
-             (apply
-              ui/horizontal-layout
-              (interpose
-               (ui/spacer 8)
-               [(basic/button {:text "edit"
-                               :on-click
-                               (fn []
-                                 [[:set $edit-ns? true]
-                                  [:set $temp-ns-name (name (:name ns-info))]])})
-                (basic/button {:text "save"
-                               :on-click
-                               (fn []
-                                 [[::save-to-db xtdb ns-info ss]])})
-                (basic/button {:text "load"
-                               :on-click
-                               (fn []
-                                 [[::show-load-options $load-options xtdb]])})
-                
-                (ui/label (:name ns-info))])
+              load-options
+              (apply
+               ui/vertical-layout
+               (basic/button {:text "cancel"
+                              :on-click
+                              (fn []
+                                [[:set $load-options nil]])})
+               (for [option load-options]
+                 (basic/button {:text option
+                                :on-click
+                                (fn []
+                                  [[::load-from-db xtdb $ns-info $ss option]
+                                   [:set $load-options nil]])})))
               
-              
-              ))))
-        (basic/scrollview
-         {:scroll-bounds [1200 800]
-          :$body nil
-          :body
-          (vertical-layout
+              :else
+              (apply
+               ui/horizontal-layout
+               (interpose
+                (ui/spacer 8)
+                [(basic/button {:text "edit"
+                                :on-click
+                                (fn []
+                                  [[:set $edit-ns? true]
+                                   [:set $temp-ns-name (name (:name ns-info))]])})
+                 (basic/button {:text "save"
+                                :on-click
+                                (fn []
+                                  [[::save-to-db xtdb ns-info ss]])})
+                 (basic/button {:text "load"
+                                :on-click
+                                (fn []
+                                  [[::show-load-options $load-options xtdb]])})
+                 (ui/label (:name ns-info))])))))
+         (basic/scrollview
+          {:scroll-bounds [1200 800]
+           :$body nil
+           :body
            (vertical-layout
-            (apply vertical-layout
-                   (for [row ss]
-                     (let [srow
-                           (ui/on
-                            :save (fn []
-                                    [[::save-to-db ss (:id row)]])
-                            :cleanup (fn []
-                                       [[::cleanup $ss (:id row)]])
-                            (spreadsheet-row {:row row
-                                              :result (get results (:id row))}))
-                           srow-width 23]
-                       (vertical-layout
-                        (if drop-object
-                          (let [hover? (get extra [$row :drag-hover])]
-                            (dnd/on-drop
-                            (fn [_ m]
-                              [[::drop-in-spreadsheet-row $ss (:id row)
-                                (:name m) (:path m)]])
-                            (dnd/on-drag-hover
-                             {:hover? hover?
-                              :$body nil
-                              :body
-                              (if hover?
-                                (ui/with-color [1 0 0]
-                                  (ui/rectangle srow-width 5))
-                                (ui/rectangle srow-width 5))})))
-                          (let [hover? (get extra [$row :hover])]
-                            (basic/on-hover
-                             {:hover? hover?
-                              :$body nil
-                              :body (if hover?
-                                      (button-bar {:ss ss
-                                                   :row-id (:id row)})
-                                      ;;(ui/spacer srow-width 5)
-                                      (ui/rectangle srow-width 5)
-                                      )})))
-                        srow))))
-            (when drop-object
-              (dnd/on-drop
-               (fn [_ m]
-                 [[::drop-in-spreadsheet-row $ss nil
-                   (:name m) (:path m)]])
-               (ui/filled-rectangle [0.7 0.5 0.5]
-                                    32 32)))
-            (ui/spacer 0 300)))})))})))
+            (vertical-layout
+             (apply vertical-layout
+                    (for [row ss]
+                      (let [srow
+                            (ui/on
+                             :save (fn []
+                                     [[::save-to-db ss (:id row)]])
+                             :cleanup (fn []
+                                        [[::cleanup $ss (:id row)]])
+                             (spreadsheet-row {:row row
+                                               :result (get results (:id row))}))
+                            srow-width 23]
+                        (vertical-layout
+                         (if drop-object
+                           (let [hover? (get extra [$row :drag-hover])]
+                             (dnd/on-drop
+                              (fn [_ m]
+                                [[::drop-in-spreadsheet-row
+                                  {:$ss $ss
+                                   :row-id (:id row)
+                                   :obj m}]])
+                              (dnd/on-drag-hover
+                               {:hover? hover?
+                                :$body nil
+                                :body
+                                (if hover?
+                                  (ui/with-color [1 0 0]
+                                    (ui/rectangle srow-width 5))
+                                  (ui/rectangle srow-width 5))})))
+                           (let [hover? (get extra [$row :hover])]
+                             (basic/on-hover
+                              {:hover? hover?
+                               :$body nil
+                               :body (if hover?
+                                       (button-bar {:ss ss
+                                                    :row-id (:id row)})
+                                       ;;(ui/spacer srow-width 5)
+                                       (ui/rectangle srow-width 5)
+                                       )})))
+                         srow))))
+             (when drop-object
+               (dnd/on-drop
+                (fn [_ m]
+                  [[::drop-in-spreadsheet-row
+                    {:$ss $ss
+                     :obj m}]])
+                (ui/filled-rectangle [0.7 0.5 0.5]
+                                     32 32)))
+             (ui/spacer 0 300)))}))))})))
 
 (defonce spreadsheet-state (atom {}))
 
@@ -1151,6 +1170,7 @@
          assoc
          :ss []
          ;; :xtdb @xnode
+         ::id (genid)
          :ns-info {:name 'foo.baz
                    :require '([membrane.ui :as ui
                                :refer [vertical-layout
