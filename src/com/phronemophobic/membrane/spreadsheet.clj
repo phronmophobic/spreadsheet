@@ -24,8 +24,8 @@
             [membrane.alpha.component.drag-and-drop :as dnd]
             [liq.buffer :as buffer]
 
-            xtdb.rocksdb
-            [xtdb.api :as xt]
+            ;; xtdb.rocksdb
+            ;; [xtdb.api :as xt]
 
 
             )
@@ -936,7 +936,7 @@
                      scroll-button-size))]))))
 
 (defui spreadsheet-editor [{:keys [ss results
-                                   xtdb
+                                   ;; xtdb
                                    load-options
                                    ns-info
                                    ^:membrane.component/contextual
@@ -980,7 +980,7 @@
                                   assoc :name (symbol temp-ns-name)]])})
                (basic/textarea {:text temp-ns-name}))
 
-              load-options
+              #_#_load-options
               (apply
                ui/vertical-layout
                (basic/button {:text "cancel"
@@ -1004,11 +1004,11 @@
                                 (fn []
                                   [[:set $edit-ns? true]
                                    [:set $temp-ns-name (name (:name ns-info))]])})
-                 (basic/button {:text "save"
+                 #_(basic/button {:text "save"
                                 :on-click
                                 (fn []
                                   [[::save-to-db xtdb ns-info ss]])})
-                 (basic/button {:text "load"
+                 #_(basic/button {:text "load"
                                 :on-click
                                 (fn []
                                   [[::show-load-options $load-options xtdb]])})
@@ -1137,15 +1137,15 @@
 
 
 
-(def cfg {:store {:backend :file :path (.getAbsolutePath
+#_(def cfg {:store {:backend :file :path (.getAbsolutePath
                                         (io/file "sstest"))}})
 
 
-(defn mem-db
+#_(defn mem-db
   ([]
    (xt/start-node {})))
 
-(defn start-xtdb! []
+#_(defn start-xtdb! []
   (let [home-dir (System/getProperty "user.home")]
     (assert (and home-dir
                  (not= home-dir "")))
@@ -1161,8 +1161,8 @@
         :xtdb/document-store (kv-store "data/dev/doc-store")
         :xtdb/index-store (kv-store "data/dev/index-store")}))))
 
-(defonce xnode (delay (start-xtdb!)))
-(defn stop-xtdb! []
+#_(defonce xnode (delay (start-xtdb!)))
+#_(defn stop-xtdb! []
   (.close @xnode))
 
 (defn init-spreadsheet []
@@ -1178,7 +1178,7 @@
                               [clojure.java.io :as io]
                               [com.phronemophobic.membrane.spreadsheet :as ss]
                               [clojure.edn :as edn]
-                              [xtdb.api :as xt]
+                              ;; [xtdb.api :as xt]
                               clojure.set
                               [clojure.string :as str]
                               [clojure.data.json :as json])
@@ -1748,37 +1748,37 @@
 
 
 
-(defn ->transaction [{:keys [ss ns-info]}]
-  (let [db-cells
-        (->> ss
-             (spec/transform [spec/ALL]
-                             (fn [cell]
-                               {:cell/id (:id cell)
-                                :xt/id {:cell/id (:id cell)}
-                                ;; :db/
-                                :cell/name (:name cell)
-                                ;; :cell/ns (ns-name *ns*)
-                                :cell/def (boolean (:def cell))
-                                :cell/side-effect? (boolean (:side-effect? cell))
-                                :cell/editor (:editor cell)
-                                :cell.source/edn (->edn (:src cell))})))
-        cell-list {:xt/id (into {}
-                                (map-indexed (fn [idx cell]
-                                               [idx (:xt/id cell)]))
-                                db-cells)
-                   :cell/list (mapv :xt/id db-cells)}
-        db-ns {:xt/id {:ns/name (:name ns-info)}
-               :ns/name (:name ns-info)
-               :ns/require (->edn (:require ns-info))
-               :ns/import (->edn (:import ns-info))
-               :ns/cells (:xt/id cell-list)}]
-    (into []
+;; (defn ->transaction [{:keys [ss ns-info]}]
+;;   (let [db-cells
+;;         (->> ss
+;;              (spec/transform [spec/ALL]
+;;                              (fn [cell]
+;;                                {:cell/id (:id cell)
+;;                                 :xt/id {:cell/id (:id cell)}
+;;                                 ;; :db/
+;;                                 :cell/name (:name cell)
+;;                                 ;; :cell/ns (ns-name *ns*)
+;;                                 :cell/def (boolean (:def cell))
+;;                                 :cell/side-effect? (boolean (:side-effect? cell))
+;;                                 :cell/editor (:editor cell)
+;;                                 :cell.source/edn (->edn (:src cell))})))
+;;         cell-list {:xt/id (into {}
+;;                                 (map-indexed (fn [idx cell]
+;;                                                [idx (:xt/id cell)]))
+;;                                 db-cells)
+;;                    :cell/list (mapv :xt/id db-cells)}
+;;         db-ns {:xt/id {:ns/name (:name ns-info)}
+;;                :ns/name (:name ns-info)
+;;                :ns/require (->edn (:require ns-info))
+;;                :ns/import (->edn (:import ns-info))
+;;                :ns/cells (:xt/id cell-list)}]
+;;     (into []
 
-          (comp cat
-                (map #(vector ::xt/put %)))
-          [db-cells
-           [cell-list
-            db-ns]])))
+;;           (comp cat
+;;                 (map #(vector ::xt/put %)))
+;;           [db-cells
+;;            [cell-list
+;;             db-ns]])))
 
 (defn db-cell->cell
   [db-cell]
@@ -1803,7 +1803,7 @@
                  :ns/cells
                  :cell/list))})
 
-(defn load-ns [db ns-name]
+#_(defn load-ns [db ns-name]
   (let [result
         (ffirst
          (xt/q db
@@ -1814,19 +1814,19 @@
                ns-name))]
     (db-result->sstate result)))
 
-(defeffect ::save-to-db [node ns-info ss]
+#_(defeffect ::save-to-db [node ns-info ss]
   (let [tx (xt/submit-tx node (->transaction
                              {:ns-info ns-info
                               :ss ss}))]
     (xt/await-tx node tx)))
 
-(defeffect ::load-from-db [node $ns-info $ss ns-name]
+#_(defeffect ::load-from-db [node $ns-info $ss ns-name]
   (let [{:keys [ns-info ss]} (load-ns (xt/db node) ns-name)]
     (when (and ns-info ss)
       (dispatch! :set $ns-info ns-info)
       (dispatch! :set $ss ss))))
 
-(defeffect ::show-load-options [$load-options node]
+#_(defeffect ::show-load-options [$load-options node]
   (let [ns-names (->> (xt/q (xt/db node)
                             '{:find [?name]
                               :where [[_ :ns/name ?name]]})
@@ -1835,8 +1835,8 @@
 
 (comment
 
-  (def db (mem-db))
-  (xt/submit-tx db (->transaction (select-keys @spreadsheet-state [:ss :ns-info])))
+  ;; (def db (mem-db))
+  ;; (xt/submit-tx db (->transaction (select-keys @spreadsheet-state [:ss :ns-info])))
 
   ,
   )
