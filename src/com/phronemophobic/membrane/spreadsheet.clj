@@ -766,6 +766,9 @@
      :code-editor
      (code-editor/text-editor {:buf (:src row)})
 
+     :value
+     nil
+
      :canvas
      (canvas-editor {:src (:src row)
                      :result result})
@@ -875,25 +878,27 @@
 (defeffect ::drop-in-spreadsheet-row [{:keys [row-id obj]
                                        $spreadsheet :$ss
                                        spreadsheet-id ::id}]
-  (let [expr (if (and (= spreadsheet-id
-                         (::id obj))
-                      (seq (:path obj)))
-               (path->expression (:name obj) (:path obj))
-               @(:x obj))
-        row {:src (buffer/buffer (with-out-str
-                                   (clojure.pprint/pprint expr))
-                                 {:mode :insert})}
-        editor-type :code-editor]
+  (let [{:keys [row editor-type] :as m}
+        (if (and (= spreadsheet-id
+                    (::id obj))
+                 (seq (:path obj)))
+          (let [expr (path->expression (:name obj) (:path obj))]
+            {:editor-type :code-editor
+             :row {:src (buffer/buffer (with-out-str
+                                         (clojure.pprint/pprint expr))
+                                       {:mode :insert})}})
+          {:editor-type :value
+           :row {:value @(:x obj)}})]
     (if row-id
-        (dispatch! ::insert-spreadsheet-row
-                   $spreadsheet
-                   row-id
-                   editor-type
-                   row)
-        (dispatch! ::add-spreadsheet-row
-                   $spreadsheet
-                   editor-type
-                   row))))
+      (dispatch! ::insert-spreadsheet-row
+                 $spreadsheet
+                 row-id
+                 editor-type
+                 row)
+      (dispatch! ::add-spreadsheet-row
+                 $spreadsheet
+                 editor-type
+                 row))))
 
 
 (defui button-bar [{:keys [ss row-id]}]
@@ -1220,6 +1225,11 @@
          {:src 12}))
 
 
+(defmethod parse-src :value [row]
+  (assoc row :value (:value row)))
+(defmethod init-editor :value [row]
+  row)
+
 (defmethod parse-src :canvas [row]
   (let [
         src (:src row)
@@ -1260,8 +1270,8 @@
                                    (prn e))
                                  (catch AssertionError e))))
                    elements)]
-   (assoc row :form
-          form)))
+    (assoc row :form form)))
+
 (defmethod init-editor :canvas [row]
   (merge row
          {:src {:elements []}}))
@@ -1548,11 +1558,14 @@
            :results vals
            :side-effects side-effects}
           (let [row (first ss)
-                {:keys [sym form err]} row
-                cache-key [sym form err bindings]
+                {:keys [sym form value err]} row
+                cache-key [sym form value err bindings]
                 [side-effect-result
                  result]
-                (if (:side-effect? row)
+
+                (cond
+
+                  (:side-effect? row)
                   (if-let [ts (:side-effect-ts row)]
                     (let [{result :result
                            last-run-ts :side-effect-ts
@@ -1573,7 +1586,15 @@
                       (Exception. "Side Effect not marked to run yet.")
                       nil)])
 
-                  ;; else not side effect
+                  (:value row)
+                  [nil
+                   ;; AResult has identity semantics
+                   ;; reuse when possible
+                   (if-let [result (get cache cache-key)]
+                     result
+                     (wrap-result-constant nil (:value row)))]
+
+                  :else
                   [nil
                    (if-let [result (get cache cache-key)]
                      result
